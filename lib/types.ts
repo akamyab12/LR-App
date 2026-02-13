@@ -1,3 +1,21 @@
+export enum AppRole {
+  PLATFORM_ADMIN = 'platform_admin',
+  COMPANY_ADMIN = 'company_admin',
+  EXHIBITOR = 'exhibitor',
+}
+
+export type AppRoleValue = `${AppRole}`;
+
+export const APP_ROLE_VALUES: AppRoleValue[] = [
+  AppRole.PLATFORM_ADMIN,
+  AppRole.COMPANY_ADMIN,
+  AppRole.EXHIBITOR,
+];
+
+export function isAppRole(value: unknown): value is AppRoleValue {
+  return typeof value === 'string' && APP_ROLE_VALUES.includes(value as AppRoleValue);
+}
+
 export type LeadTag =
   | 'Budget'
   | 'Decision Maker'

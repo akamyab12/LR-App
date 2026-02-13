@@ -92,7 +92,7 @@ function formatFollowUpDate(value: unknown): string {
 
 export default function LeadsScreen() {
   const router = useRouter();
-  const { companyId, isReady } = useCompany();
+  const { activeCompanyId, isReady } = useCompany();
   const [query, setQuery] = useState('');
   const [isLoadingLeads, setIsLoadingLeads] = useState(false);
   const [leads, setLeads] = useState<DbLeadRow[]>([]);
@@ -102,7 +102,7 @@ export default function LeadsScreen() {
       return;
     }
 
-    if (!companyId) {
+    if (!activeCompanyId) {
       setLeads([]);
       setIsLoadingLeads(false);
       return;
@@ -116,7 +116,7 @@ export default function LeadsScreen() {
       const { data } = await supabase
         .from('leads')
         .select('*')
-        .eq('company_id', companyId)
+        .eq('company_id', activeCompanyId)
         .order('created_at', { ascending: false });
 
       if (!isActive) {
@@ -137,7 +137,7 @@ export default function LeadsScreen() {
     return () => {
       isActive = false;
     };
-  }, [isReady, companyId]);
+  }, [isReady, activeCompanyId]);
 
   const filteredLeads = useMemo(() => {
     const search = query.trim().toLowerCase();

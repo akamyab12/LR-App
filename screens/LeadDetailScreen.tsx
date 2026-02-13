@@ -146,7 +146,7 @@ function mapRowToLead(row: DbLeadDetailRow): Lead {
 export default function LeadDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { companyId, isReady } = useCompany();
+  const { activeCompanyId, isReady } = useCompany();
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const leadId = useMemo(() => {
     const value = params.id;
@@ -172,7 +172,7 @@ export default function LeadDetailScreen() {
       return;
     }
 
-    if (!companyId) {
+    if (!activeCompanyId) {
       setLead(null);
       setSelectedTags([]);
       setIsLoading(false);
@@ -186,7 +186,7 @@ export default function LeadDetailScreen() {
       const { data } = await supabase
         .from('leads')
         .select('*')
-        .eq('company_id', companyId)
+        .eq('company_id', activeCompanyId)
         .eq('id', leadId)
         .single<DbLeadDetailRow>();
 
@@ -212,7 +212,7 @@ export default function LeadDetailScreen() {
     return () => {
       isActive = false;
     };
-  }, [leadId, companyId, isReady]);
+  }, [leadId, activeCompanyId, isReady]);
 
   const toggleTag = (tag: LeadTag) => {
     setSelectedTags((prev) => {

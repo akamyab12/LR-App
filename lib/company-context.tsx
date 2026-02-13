@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { supabase } from '@/lib/supabase';
+import { AppRole, isAppRole, type AppRoleValue } from '@/lib/types';
 
 type DbUserRow = {
   id?: string | null;
@@ -11,7 +12,10 @@ type DbUserRow = {
 type CompanyContextValue = {
   userId: string | null;
   companyId: string | null;
-  role: string | null;
+  activeCompanyId: string | null;
+  role: AppRoleValue | null;
+  canSwitchCompany: boolean;
+  setActiveCompanyId: (companyId: string | null) => void;
   isReady: boolean;
   refreshCompanyContext: () => Promise<void>;
 };
@@ -21,7 +25,8 @@ const CompanyContext = createContext<CompanyContextValue | undefined>(undefined)
 export function CompanyProvider({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
   const [companyId, setCompanyId] = useState<string | null>(null);
-  const [role, setRole] = useState<string | null>(null);
+  const [activeCompanyId, setActiveCompanyIdState] = useState<string | null>(null);
+  const [role, setRole] = useState<AppRoleValue | null>(null);
   const [isReady, setIsReady] = useState(false);
 
   const refreshCompanyContext = useCallback(async () => {
@@ -33,6 +38,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     if (!sessionUserId) {
       setUserId(null);
       setCompanyId(null);
+      setActiveCompanyIdState(null);
       setRole(null);
       setIsReady(true);
       return;
@@ -44,11 +50,38 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
       .eq('id', sessionUserId)
       .maybeSingle<DbUserRow>();
 
+    const resolvedCompanyId = typeof userRow?.company_id === 'string' ? userRow.company_id : null;
+    const resolvedRole = isAppRole(userRow?.role) ? userRow.role : null;
+
     setUserId(sessionUserId);
-    setCompanyId(typeof userRow?.company_id === 'string' ? userRow.company_id : null);
-    setRole(typeof userRow?.role === 'string' ? userRow.role : null);
+    setCompanyId(resolvedCompanyId);
+    setRole(resolvedRole);
+    setActiveCompanyIdState((prev) => {
+      if (resolvedRole === AppRole.PLATFORM_ADMIN) {
+        return prev ?? resolvedCompanyId;
+      }
+      return resolvedCompanyId;
+    });
     setIsReady(true);
   }, []);
+
+  const setActiveCompanyId = useCallback(
+    (nextCompanyId: string | null) => {
+      setActiveCompanyIdState(() => {
+        if (role !== AppRole.PLATFORM_ADMIN) {
+          return companyId;
+        }
+
+        if (nextCompanyId === null) {
+          return companyId;
+        }
+
+        const normalized = nextCompanyId.trim();
+        return normalized.length > 0 ? normalized : companyId;
+      });
+    },
+    [role, companyId]
+  );
 
   useEffect(() => {
     let isActive = true;
@@ -67,6 +100,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
       if (isActive) {
         setUserId(null);
         setCompanyId(null);
+        setActiveCompanyIdState(null);
         setRole(null);
         setIsReady(true);
       }
@@ -79,6 +113,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
         if (isActive) {
           setUserId(null);
           setCompanyId(null);
+          setActiveCompanyIdState(null);
           setRole(null);
           setIsReady(true);
         }
@@ -95,11 +130,14 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     () => ({
       userId,
       companyId,
+      activeCompanyId,
       role,
+      canSwitchCompany: role === AppRole.PLATFORM_ADMIN,
+      setActiveCompanyId,
       isReady,
       refreshCompanyContext,
     }),
-    [userId, companyId, role, isReady, refreshCompanyContext]
+    [userId, companyId, activeCompanyId, role, setActiveCompanyId, isReady, refreshCompanyContext]
   );
 
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;
