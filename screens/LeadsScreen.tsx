@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 
 import StarRating from '@/components/StarRating';
-import { fetchLeadsByActiveCompany } from '@/lib/api';
+import { fetchLeadsByScope, hasLeadQueryScope } from '@/lib/api';
 import { useCompany } from '@/lib/company-context';
 
 type DbLeadRow = {
@@ -92,7 +92,7 @@ function formatFollowUpDate(value: unknown): string {
 
 export default function LeadsScreen() {
   const router = useRouter();
-  const { activeCompanyId, isReady } = useCompany();
+  const { activeCompanyId, isReady, role } = useCompany();
   const [query, setQuery] = useState('');
   const [isLoadingLeads, setIsLoadingLeads] = useState(false);
   const [leads, setLeads] = useState<DbLeadRow[]>([]);
@@ -102,7 +102,8 @@ export default function LeadsScreen() {
       return;
     }
 
-    if (!activeCompanyId) {
+    const scope = { role, activeCompanyId };
+    if (!hasLeadQueryScope(scope)) {
       setLeads([]);
       setIsLoadingLeads(false);
       return;
@@ -113,7 +114,7 @@ export default function LeadsScreen() {
     const loadLeads = async () => {
       setIsLoadingLeads(true);
 
-      const { data } = await fetchLeadsByActiveCompany<DbLeadRow>(activeCompanyId);
+      const { data } = await fetchLeadsByScope<DbLeadRow>(scope);
 
       if (!isActive) {
         return;
@@ -133,7 +134,7 @@ export default function LeadsScreen() {
     return () => {
       isActive = false;
     };
-  }, [isReady, activeCompanyId]);
+  }, [isReady, activeCompanyId, role]);
 
   const filteredLeads = useMemo(() => {
     const search = query.trim().toLowerCase();

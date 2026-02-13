@@ -8,7 +8,7 @@ import StarRating from '@/components/StarRating';
 import AppHeader from '@/components/ui/AppHeader';
 import Card from '@/components/ui/Card';
 import SectionTitle from '@/components/ui/SectionTitle';
-import { fetchLeadByIdAndActiveCompany } from '@/lib/api';
+import { fetchLeadByScopeAndId, hasLeadQueryScope } from '@/lib/api';
 import { useCompany } from '@/lib/company-context';
 import type { Lead, LeadAiInsights, LeadTag } from '@/lib/types';
 
@@ -146,7 +146,7 @@ function mapRowToLead(row: DbLeadDetailRow): Lead {
 export default function LeadDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { activeCompanyId, isReady } = useCompany();
+  const { activeCompanyId, isReady, role } = useCompany();
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const leadId = useMemo(() => {
     const value = params.id;
@@ -172,7 +172,8 @@ export default function LeadDetailScreen() {
       return;
     }
 
-    if (!activeCompanyId) {
+    const scope = { role, activeCompanyId };
+    if (!hasLeadQueryScope(scope)) {
       setLead(null);
       setSelectedTags([]);
       setIsLoading(false);
@@ -183,7 +184,7 @@ export default function LeadDetailScreen() {
     setIsLoading(true);
 
     const loadLead = async () => {
-      const { data } = await fetchLeadByIdAndActiveCompany<DbLeadDetailRow>(activeCompanyId, leadId);
+      const { data } = await fetchLeadByScopeAndId<DbLeadDetailRow>(scope, leadId);
 
       if (!isActive) {
         return;
@@ -207,7 +208,7 @@ export default function LeadDetailScreen() {
     return () => {
       isActive = false;
     };
-  }, [leadId, activeCompanyId, isReady]);
+  }, [leadId, activeCompanyId, isReady, role]);
 
   const toggleTag = (tag: LeadTag) => {
     setSelectedTags((prev) => {

@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import type { Lead, PriorityLead } from '@/lib/types';
+import { AppRole, type AppRoleValue, type Lead, type PriorityLead } from '@/lib/types';
 
 const mockLeads: Lead[] = [
   {
@@ -99,17 +99,53 @@ type EqCapableQuery<TQuery> = {
   eq: (column: string, value: unknown) => TQuery;
 };
 
-export function withActiveCompanyId<TQuery extends EqCapableQuery<TQuery>>(
-  query: TQuery,
-  activeCompanyId: string
-): TQuery {
-  return query.eq('company_id', activeCompanyId);
+export type CompanyScope = {
+  role: AppRoleValue | null;
+  activeCompanyId: string | null;
+};
+
+function normalizeCompanyId(companyId: string | null): string | null {
+  if (typeof companyId !== 'string') {
+    return null;
+  }
+
+  const normalized = companyId.trim();
+  return normalized.length > 0 ? normalized : null;
 }
 
-export async function fetchLeadsByActiveCompany<TLeadRow = Record<string, unknown>>(
-  activeCompanyId: string
+export function isPlatformAdminScope(scope: CompanyScope): boolean {
+  return scope.role === AppRole.PLATFORM_ADMIN;
+}
+
+export function hasLeadQueryScope(scope: CompanyScope): boolean {
+  return isPlatformAdminScope(scope) || normalizeCompanyId(scope.activeCompanyId) !== null;
+}
+
+export function applyLeadCompanyScope<TQuery extends EqCapableQuery<TQuery>>(
+  query: TQuery,
+  scope: CompanyScope
+): TQuery | null {
+  if (isPlatformAdminScope(scope)) {
+    return query;
+  }
+
+  const companyId = normalizeCompanyId(scope.activeCompanyId);
+  if (!companyId) {
+    return null;
+  }
+
+  return query.eq('company_id', companyId);
+}
+
+export async function fetchLeadsByScope<TLeadRow = Record<string, unknown>>(
+  scope: CompanyScope
 ) {
-  return withActiveCompanyId(supabase.from('leads').select('*'), activeCompanyId).order<TLeadRow>(
+  const scopedQuery = applyLeadCompanyScope(supabase.from('leads').select('*'), scope);
+  if (!scopedQuery) {
+    return { data: [] as TLeadRow[], error: null };
+  }
+
+  return scopedQuery.order<TLeadRow>(
     'created_at',
     {
       ascending: false,
@@ -117,11 +153,16 @@ export async function fetchLeadsByActiveCompany<TLeadRow = Record<string, unknow
   );
 }
 
-export async function fetchLeadByIdAndActiveCompany<TLeadRow = Record<string, unknown>>(
-  activeCompanyId: string,
+export async function fetchLeadByScopeAndId<TLeadRow = Record<string, unknown>>(
+  scope: CompanyScope,
   leadId: string
 ) {
-  return withActiveCompanyId(supabase.from('leads').select('*'), activeCompanyId)
+  const scopedQuery = applyLeadCompanyScope(supabase.from('leads').select('*'), scope);
+  if (!scopedQuery) {
+    return { data: null as TLeadRow | null, error: null };
+  }
+
+  return scopedQuery
     .eq('id', leadId)
     .single<TLeadRow>();
 }
