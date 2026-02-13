@@ -3,6 +3,10 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { supabase } from '@/lib/supabase';
 import { AppRole, isAppRole, type AppRoleValue } from '@/lib/types';
 
+const DEV_ACTIVE_COMPANY_ID_OVERRIDE = __DEV__
+  ? (process.env.EXPO_PUBLIC_DEV_ACTIVE_COMPANY_ID ?? '').trim()
+  : '';
+
 type DbUserRow = {
   id?: string | null;
   company_id?: string | null;
@@ -58,6 +62,9 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     setRole(resolvedRole);
     setActiveCompanyIdState((prev) => {
       if (resolvedRole === AppRole.PLATFORM_ADMIN) {
+        if (DEV_ACTIVE_COMPANY_ID_OVERRIDE.length > 0) {
+          return DEV_ACTIVE_COMPANY_ID_OVERRIDE;
+        }
         return prev ?? resolvedCompanyId;
       }
       return resolvedCompanyId;

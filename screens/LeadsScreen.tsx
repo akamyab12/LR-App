@@ -12,8 +12,8 @@ import {
 } from 'react-native';
 
 import StarRating from '@/components/StarRating';
+import { fetchLeadsByActiveCompany } from '@/lib/api';
 import { useCompany } from '@/lib/company-context';
-import { supabase } from '@/lib/supabase';
 
 type DbLeadRow = {
   id?: string | number;
@@ -113,11 +113,7 @@ export default function LeadsScreen() {
     const loadLeads = async () => {
       setIsLoadingLeads(true);
 
-      const { data } = await supabase
-        .from('leads')
-        .select('*')
-        .eq('company_id', activeCompanyId)
-        .order('created_at', { ascending: false });
+      const { data } = await fetchLeadsByActiveCompany<DbLeadRow>(activeCompanyId);
 
       if (!isActive) {
         return;

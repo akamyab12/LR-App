@@ -1,3 +1,4 @@
+import { supabase } from '@/lib/supabase';
 import type { Lead, PriorityLead } from '@/lib/types';
 
 const mockLeads: Lead[] = [
@@ -92,6 +93,37 @@ const mockLeads: Lead[] = [
 async function withLatency<T>(value: T): Promise<T> {
   await new Promise((resolve) => setTimeout(resolve, 120));
   return value;
+}
+
+type EqCapableQuery<TQuery> = {
+  eq: (column: string, value: unknown) => TQuery;
+};
+
+export function withActiveCompanyId<TQuery extends EqCapableQuery<TQuery>>(
+  query: TQuery,
+  activeCompanyId: string
+): TQuery {
+  return query.eq('company_id', activeCompanyId);
+}
+
+export async function fetchLeadsByActiveCompany<TLeadRow = Record<string, unknown>>(
+  activeCompanyId: string
+) {
+  return withActiveCompanyId(supabase.from('leads').select('*'), activeCompanyId).order<TLeadRow>(
+    'created_at',
+    {
+      ascending: false,
+    }
+  );
+}
+
+export async function fetchLeadByIdAndActiveCompany<TLeadRow = Record<string, unknown>>(
+  activeCompanyId: string,
+  leadId: string
+) {
+  return withActiveCompanyId(supabase.from('leads').select('*'), activeCompanyId)
+    .eq('id', leadId)
+    .single<TLeadRow>();
 }
 
 export async function fetchLeads(): Promise<Lead[]> {

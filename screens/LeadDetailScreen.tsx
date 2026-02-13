@@ -8,8 +8,8 @@ import StarRating from '@/components/StarRating';
 import AppHeader from '@/components/ui/AppHeader';
 import Card from '@/components/ui/Card';
 import SectionTitle from '@/components/ui/SectionTitle';
+import { fetchLeadByIdAndActiveCompany } from '@/lib/api';
 import { useCompany } from '@/lib/company-context';
-import { supabase } from '@/lib/supabase';
 import type { Lead, LeadAiInsights, LeadTag } from '@/lib/types';
 
 type DbLeadDetailRow = {
@@ -183,12 +183,7 @@ export default function LeadDetailScreen() {
     setIsLoading(true);
 
     const loadLead = async () => {
-      const { data } = await supabase
-        .from('leads')
-        .select('*')
-        .eq('company_id', activeCompanyId)
-        .eq('id', leadId)
-        .single<DbLeadDetailRow>();
+      const { data } = await fetchLeadByIdAndActiveCompany<DbLeadDetailRow>(activeCompanyId, leadId);
 
       if (!isActive) {
         return;
