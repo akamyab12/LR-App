@@ -1,12 +1,44 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import StarRating from '@/components/StarRating';
 import ScreenContainer from '@/components/ui/ScreenContainer';
-import { fetchPriorityLeads } from '@/lib/api';
-import type { PriorityLead } from '@/lib/types';
+import {
+  fetchActiveEventByCompanyId,
+  fetchLeadsByScope,
+  hasLeadQueryScope,
+  starsFromPriorityScore,
+} from '@/lib/api';
+import { useCompany } from '@/lib/company-context';
+
+type DbPriorityLeadRow = {
+  id?: string | number | null;
+  name?: string | null;
+  full_name?: string | null;
+  title?: string | null;
+  job_title?: string | null;
+  role?: string | null;
+  company?: string | null;
+  company_name?: string | null;
+  priority_score?: number | null;
+  priority?: number | null;
+  stars?: number | null;
+  status?: string | null;
+  quick_tags?: unknown;
+  event_id?: string | number | null;
+};
+
+type PriorityLeadView = {
+  id: string;
+  name: string;
+  title: string;
+  company: string;
+  priorityScore: number;
+  stars: number;
+  highlights: string[];
+};
 
 const cardThemes = [
   { base: '#ff2f6d', top: '#ff6197', bottom: '#d61557' },
@@ -15,16 +47,153 @@ const cardThemes = [
   { base: '#0f172a', top: '#1e293b', bottom: '#030712' },
 ];
 
+function getPriorityScore(row: DbPriorityLeadRow): number {
+  const candidate =
+    typeof row.priority_score === 'number' && Number.isFinite(row.priority_score)
+      ? row.priority_score
+      : typeof row.priority === 'number' && Number.isFinite(row.priority)
+        ? row.priority
+        : 0;
+  return Math.max(0, Math.min(100, Math.round(candidate)));
+}
+
+function getLeadName(row: DbPriorityLeadRow): string {
+  return (
+    (typeof row.name === 'string' && row.name.trim()) ||
+    (typeof row.full_name === 'string' && row.full_name.trim()) ||
+    'Unknown Lead'
+  );
+}
+
+function getLeadTitle(row: DbPriorityLeadRow): string {
+  return (
+    (typeof row.title === 'string' && row.title.trim()) ||
+    (typeof row.job_title === 'string' && row.job_title.trim()) ||
+    (typeof row.role === 'string' && row.role.trim()) ||
+    'No title'
+  );
+}
+
+function getLeadCompany(row: DbPriorityLeadRow): string {
+  return (
+    (typeof row.company === 'string' && row.company.trim()) ||
+    (typeof row.company_name === 'string' && row.company_name.trim()) ||
+    'Unknown Company'
+  );
+}
+
+function getHighlights(row: DbPriorityLeadRow): string[] {
+  if (Array.isArray(row.quick_tags)) {
+    return row.quick_tags
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0)
+      .slice(0, 3);
+  }
+
+  const status = typeof row.status === 'string' ? row.status.trim() : '';
+  return status ? [status] : [];
+}
+
+function normalizeEventId(value: unknown): string {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value);
+  }
+  return '';
+}
+
 export default function PriorityScreen() {
   const router = useRouter();
-  const [leads, setLeads] = useState<PriorityLead[]>([]);
+  const { activeCompanyId, isReady, role } = useCompany();
+  const [leads, setLeads] = useState<PriorityLeadView[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [activeEventLabel, setActiveEventLabel] = useState('');
 
-  useEffect(() => {
-    fetchPriorityLeads()
-      .then((result) => setLeads(result.slice(0, 4)))
-      .finally(() => setIsLoading(false));
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      if (!isReady) {
+        return () => undefined;
+      }
+
+      const scope = { role, activeCompanyId };
+      if (!hasLeadQueryScope(scope)) {
+        setLeads([]);
+        setIsLoading(false);
+        setActiveEventLabel('');
+        return () => undefined;
+      }
+
+      let isActive = true;
+
+      const loadPriorityLeads = async () => {
+        setIsLoading(true);
+
+        let activeEventId = '';
+        if (typeof activeCompanyId === 'string' && activeCompanyId.trim().length > 0) {
+          const { data: eventRow } = await fetchActiveEventByCompanyId(activeCompanyId);
+          if (!isActive) {
+            return;
+          }
+          activeEventId = normalizeEventId(eventRow?.id);
+          setActiveEventLabel(activeEventId ? 'Close These First' : 'Top Priority Leads');
+        } else {
+          setActiveEventLabel('Top Priority Leads');
+        }
+
+        const { data } = await fetchLeadsByScope<DbPriorityLeadRow>(scope);
+        if (!isActive) {
+          return;
+        }
+
+        const rows = Array.isArray(data) ? (data as DbPriorityLeadRow[]) : [];
+        const eventScopedRows =
+          activeEventId.length > 0
+            ? rows.filter((row) => normalizeEventId(row.event_id) === activeEventId)
+            : rows;
+
+        const mapped = eventScopedRows
+          .map((row) => {
+            const priorityScore = getPriorityScore(row);
+            const stars =
+              typeof row.stars === 'number' && Number.isFinite(row.stars) && row.stars > 0
+                ? Math.max(0, Math.min(5, Math.round(row.stars)))
+                : starsFromPriorityScore(priorityScore);
+
+            return {
+              id: row.id != null ? String(row.id) : '',
+              name: getLeadName(row),
+              title: getLeadTitle(row),
+              company: getLeadCompany(row),
+              priorityScore,
+              stars,
+              highlights: getHighlights(row),
+            };
+          })
+          .filter((row) => row.id.length > 0)
+          .sort((a, b) => b.priorityScore - a.priorityScore)
+          .slice(0, 6);
+
+        setLeads(mapped);
+        setIsLoading(false);
+      };
+
+      loadPriorityLeads().catch(() => {
+        if (isActive) {
+          setLeads([]);
+          setIsLoading(false);
+        }
+      });
+
+      return () => {
+        isActive = false;
+      };
+    }, [isReady, role, activeCompanyId])
+  );
+
+  const sectionTitle = useMemo(() => activeEventLabel || 'Close These First', [activeEventLabel]);
 
   return (
     <ScreenContainer scroll contentContainerStyle={styles.content}>
@@ -42,12 +211,16 @@ export default function PriorityScreen() {
 
       <View style={styles.sectionHeader}>
         <Ionicons name="flame-outline" size={20} color="#fb7185" />
-        <Text style={styles.sectionTitle}>Close These First</Text>
+        <Text style={styles.sectionTitle}>{sectionTitle}</Text>
       </View>
 
       {isLoading ? (
         <View style={styles.loadingArea}>
           <ActivityIndicator size="large" color="#4f46e5" />
+        </View>
+      ) : leads.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyStateText}>No prioritized leads yet.</Text>
         </View>
       ) : (
         <View style={styles.cardStack}>
@@ -68,7 +241,7 @@ export default function PriorityScreen() {
                 <View style={[styles.glowBottom, { backgroundColor: theme.bottom }]} />
 
                 <View style={styles.rankBadge}>
-                  <Text style={styles.rankText}>#{lead.rank}</Text>
+                  <Text style={styles.rankText}>#{index + 1}</Text>
                 </View>
 
                 <Text style={styles.name}>{lead.name}</Text>
@@ -110,18 +283,18 @@ export default function PriorityScreen() {
 
 const styles = StyleSheet.create({
   content: {
-    paddingTop: 10,
-    paddingBottom: 32,
+    paddingTop: 12,
+    paddingBottom: 26,
   },
   pageHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 14,
   },
   headerIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 48,
+    height: 48,
+    borderRadius: 14,
     backgroundColor: '#4f46e5',
     alignItems: 'center',
     justifyContent: 'center',
@@ -131,16 +304,16 @@ const styles = StyleSheet.create({
   },
   pageTitle: {
     color: '#0f172a',
-    fontSize: 44,
-    lineHeight: 48,
+    fontSize: 28,
+    lineHeight: 34,
     fontWeight: '800',
-    letterSpacing: -0.5,
+    letterSpacing: -0.2,
   },
   subtitle: {
-    marginTop: 2,
+    marginTop: 1,
     color: '#64748b',
-    fontSize: 24,
-    lineHeight: 28,
+    fontSize: 15,
+    lineHeight: 21,
     fontWeight: '600',
   },
   divider: {
@@ -156,8 +329,8 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     color: '#111827',
-    fontSize: 36,
-    lineHeight: 40,
+    fontSize: 22,
+    lineHeight: 28,
     fontWeight: '800',
   },
   cardStack: {
@@ -165,8 +338,8 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   priorityCard: {
-    borderRadius: 24,
-    padding: 18,
+    borderRadius: 22,
+    padding: 16,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.12)',
@@ -196,40 +369,40 @@ const styles = StyleSheet.create({
   },
   rankBadge: {
     position: 'absolute',
-    top: 16,
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 16,
+    top: 14,
+    right: 14,
+    width: 54,
+    height: 54,
+    borderRadius: 18,
     backgroundColor: 'rgba(255,255,255,0.26)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   rankText: {
     color: '#ffffff',
-    fontSize: 22,
-    lineHeight: 24,
+    fontSize: 20,
+    lineHeight: 22,
     fontWeight: '800',
   },
   name: {
     color: '#ffffff',
-    fontSize: 42,
-    lineHeight: 46,
+    fontSize: 24,
+    lineHeight: 30,
     fontWeight: '800',
-    paddingRight: 56,
+    paddingRight: 66,
   },
   title: {
     marginTop: 4,
     color: 'rgba(255,255,255,0.94)',
-    fontSize: 28,
-    lineHeight: 32,
+    fontSize: 17,
+    lineHeight: 22,
     fontWeight: '700',
   },
   company: {
     marginTop: 1,
     color: 'rgba(255,255,255,0.86)',
-    fontSize: 24,
-    lineHeight: 28,
+    fontSize: 14,
+    lineHeight: 20,
     fontWeight: '600',
   },
   scoreRow: {
@@ -248,14 +421,14 @@ const styles = StyleSheet.create({
   },
   scoreValue: {
     color: '#ffffff',
-    fontSize: 46,
-    lineHeight: 48,
+    fontSize: 52,
+    lineHeight: 52,
     fontWeight: '800',
   },
   scoreLabel: {
     color: 'rgba(255,255,255,0.9)',
-    fontSize: 19,
-    lineHeight: 22,
+    fontSize: 13,
+    lineHeight: 16,
     fontWeight: '700',
     marginTop: 1,
   },
@@ -266,20 +439,36 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   tagPill: {
-    borderRadius: 10,
+    borderRadius: 11,
     backgroundColor: 'rgba(255,255,255,0.24)',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
   tagText: {
     color: '#ffffff',
-    fontSize: 18,
-    lineHeight: 20,
+    fontSize: 13,
+    lineHeight: 16,
     fontWeight: '700',
   },
   loadingArea: {
     marginTop: 28,
     paddingVertical: 28,
     alignItems: 'center',
+  },
+  emptyState: {
+    marginTop: 24,
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingVertical: 20,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+  },
+  emptyStateText: {
+    color: '#64748b',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
   },
 });

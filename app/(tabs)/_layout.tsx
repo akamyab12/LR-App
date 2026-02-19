@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const ACTIVE_BG = '#4f46e5';
 const ACTIVE_LABEL = '#111827';
@@ -10,6 +11,8 @@ const INACTIVE_LABEL = '#9ca3af';
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
 export default function TabsLayout() {
+  const insets = useSafeAreaInsets();
+
   return (
     <Tabs
       screenOptions={({ route }) => ({
@@ -17,8 +20,9 @@ export default function TabsLayout() {
         tabBarActiveTintColor: ACTIVE_LABEL,
         tabBarInactiveTintColor: INACTIVE_LABEL,
         tabBarLabelStyle: styles.tabLabel,
+        tabBarIconStyle: styles.tabIcon,
         tabBarItemStyle: styles.tabItem,
-        tabBarStyle: styles.tabBar,
+        tabBarStyle: [styles.tabBar, { height: 82 + insets.bottom, paddingBottom: insets.bottom + 12 }],
         tabBarIcon: ({ color, focused }) => {
           const iconMap: Record<string, { active: IoniconName; inactive: IoniconName }> = {
             index: { active: 'scan', inactive: 'scan-outline' },
@@ -33,7 +37,7 @@ export default function TabsLayout() {
             <View style={[styles.iconWrap, focused && styles.iconWrapActive]}>
               <Ionicons
                 name={focused ? icon.active : icon.inactive}
-                size={20}
+                size={22}
                 color={focused ? '#ffffff' : color}
               />
             </View>
@@ -51,26 +55,31 @@ export default function TabsLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    height: 88,
-    paddingTop: 8,
+    paddingTop: 10,
     paddingBottom: 12,
     borderTopWidth: 1,
     borderTopColor: '#e5e7eb',
     backgroundColor: '#ffffff',
   },
   tabItem: {
-    paddingVertical: 2,
+    paddingTop: 2,
+    paddingBottom: 0,
+  },
+  tabIcon: {
+    marginTop: 0,
+    marginBottom: 4,
   },
   tabLabel: {
     fontSize: 12,
-    lineHeight: 14,
+    lineHeight: 16,
     fontWeight: '600',
-    marginTop: 2,
+    marginTop: 0,
+    paddingBottom: 2,
   },
   iconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 11,
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },

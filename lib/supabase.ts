@@ -45,6 +45,16 @@ type SingleResponse<T = unknown> = {
   error: SupabaseError | null;
 };
 
+type InsertSingleResponse<T = unknown> = {
+  data: T | null;
+  error: SupabaseError | null;
+};
+
+type UpdateSingleResponse<T = unknown> = {
+  data: T | null;
+  error: SupabaseError | null;
+};
+
 type RpcResponse<T = unknown> = {
   data: T | null;
   error: SupabaseError | null;
@@ -58,11 +68,25 @@ type SelectBuilder = {
   order: <T = unknown>(column: string, options?: { ascending?: boolean }) => Promise<SelectResponse<T>>;
 };
 
+type InsertBuilder = {
+  select: (columns?: string) => {
+    single: <T = unknown>() => Promise<InsertSingleResponse<T>>;
+  };
+};
+
+type UpdateBuilder = {
+  eq: (column: string, value: unknown) => UpdateBuilder;
+  select: (columns?: string) => {
+    single: <T = unknown>() => Promise<UpdateSingleResponse<T>>;
+  };
+};
+
 type SupabaseAuth = {
   signInWithPassword: (params: { email: string; password: string }) => Promise<{
     data: { session: AppSession | null };
     error: SupabaseError | null;
   }>;
+  signOut: () => Promise<{ error: SupabaseError | null }>;
   getSession: () => Promise<{ data: { session: AppSession | null }; error: SupabaseError | null }>;
   getUser: () => Promise<{ data: { user: SupabaseUser | null }; error: SupabaseError | null }>;
   onAuthStateChange: (
@@ -75,6 +99,8 @@ type SupabaseClient = {
   rpc: <T = unknown>(fn: string, params?: Record<string, unknown>) => Promise<RpcResponse<T>>;
   from: (table: string) => {
     select: (columns?: string) => SelectBuilder;
+    insert: (values: Record<string, unknown> | Record<string, unknown>[]) => InsertBuilder;
+    update: (values: Record<string, unknown>) => UpdateBuilder;
   };
 };
 
@@ -178,6 +204,111 @@ function createFallbackClient(): SupabaseClient {
     }
   };
 
+  const executeInsert = async <T>(
+    table: string,
+    values: Record<string, unknown> | Record<string, unknown>[],
+    columns = '*'
+  ): Promise<InsertSingleResponse<T>> => {
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return {
+        data: null,
+        error: { message: 'Missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY' },
+      };
+    }
+
+    try {
+      const url = new URL(`${supabaseUrl}/rest/v1/${table}`);
+      if (columns && columns.trim().length > 0) {
+        url.searchParams.set('select', columns);
+      }
+
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        headers: {
+          ...withAuthHeaders(),
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify(values),
+      });
+
+      const payload = await response.json();
+
+      if (!response.ok) {
+        return {
+          data: null,
+          error: normalizeError(payload),
+        };
+      }
+
+      return {
+        data: Array.isArray(payload) ? (payload[0] as T | undefined) ?? null : (payload as T),
+        error: null,
+      };
+    } catch (error) {
+      return {
+        data: null,
+        error: {
+          message: error instanceof Error ? error.message : 'Network error',
+        },
+      };
+    }
+  };
+
+  const executeUpdate = async <T>(
+    table: string,
+    values: Record<string, unknown>,
+    filters: Record<string, string>,
+    columns = '*'
+  ): Promise<UpdateSingleResponse<T>> => {
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return {
+        data: null,
+        error: { message: 'Missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY' },
+      };
+    }
+
+    try {
+      const url = new URL(`${supabaseUrl}/rest/v1/${table}`);
+      if (columns && columns.trim().length > 0) {
+        url.searchParams.set('select', columns);
+      }
+
+      for (const [key, value] of Object.entries(filters)) {
+        url.searchParams.set(key, value);
+      }
+
+      const response = await fetch(url.toString(), {
+        method: 'PATCH',
+        headers: {
+          ...withAuthHeaders(),
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify(values),
+      });
+
+      const payload = await response.json();
+
+      if (!response.ok) {
+        return {
+          data: null,
+          error: normalizeError(payload),
+        };
+      }
+
+      return {
+        data: Array.isArray(payload) ? (payload[0] as T | undefined) ?? null : (payload as T),
+        error: null,
+      };
+    } catch (error) {
+      return {
+        data: null,
+        error: {
+          message: error instanceof Error ? error.message : 'Network error',
+        },
+      };
+    }
+  };
+
   return {
     auth: {
       signInWithPassword: async ({ email, password }) => {
@@ -240,6 +371,11 @@ function createFallbackClient(): SupabaseClient {
           data: { session: currentSession },
           error: null,
         };
+      },
+      signOut: async () => {
+        currentSession = null;
+        notify('SIGNED_OUT');
+        return { error: null };
       },
       getUser: async () => {
         return {
@@ -329,6 +465,25 @@ function createFallbackClient(): SupabaseClient {
               filters,
               order: `${column}.${options?.ascending === false ? 'desc' : 'asc'}`,
             }) as Promise<SelectResponse<T>>,
+        };
+
+        return builder;
+      },
+      insert: (values) => ({
+        select: (columns = '*') => ({
+          single: <T = unknown>() => executeInsert<T>(table, values, columns),
+        }),
+      }),
+      update: (values) => {
+        const filters: Record<string, string> = {};
+        const builder: UpdateBuilder = {
+          eq: (column, value) => {
+            filters[column] = `eq.${String(value ?? '')}`;
+            return builder;
+          },
+          select: (columns = '*') => ({
+            single: <T = unknown>() => executeUpdate<T>(table, values, filters, columns),
+          }),
         };
 
         return builder;

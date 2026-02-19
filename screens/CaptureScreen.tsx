@@ -2,19 +2,46 @@ import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { createLeadFromScan } from '@/lib/api';
+
 export default function CaptureScreen() {
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [torchEnabled, setTorchEnabled] = useState(false);
   const [scanValue, setScanValue] = useState<string | null>(null);
+  const [scanLocked, setScanLocked] = useState(false);
+  const [scanningEnabled, setScanningEnabled] = useState(true);
+  const [isCreatingLead, setIsCreatingLead] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [savedRecordingUri, setSavedRecordingUri] = useState<string | null>(null);
-  const lastScanTimeRef = useRef(0);
+  const lastValueRef = useRef<string | null>(null);
+
+  const resetScanState = useCallback((reason: 'focus' | 'manual') => {
+    if (scanLocked || !scanningEnabled) {
+      console.log('SCAN_UNLOCKED', reason);
+    }
+    setScanValue(null);
+    setScanLocked(false);
+    setScanningEnabled(true);
+    setIsCreatingLead(false);
+    lastValueRef.current = null;
+  }, [scanLocked, scanningEnabled]);
+
+  useFocusEffect(
+    useCallback(() => {
+      resetScanState('focus');
+      return () => {
+        setScanValue(null);
+      };
+    }, [resetScanState])
+  );
 
   useEffect(() => {
     return () => {
@@ -24,15 +51,56 @@ export default function CaptureScreen() {
     };
   }, [recording]);
 
-  const onBarcodeScanned = useCallback((event: BarcodeScanningResult) => {
-    const now = Date.now();
-    if (now - lastScanTimeRef.current < 1500) {
-      return;
-    }
+  const onBarcodeScanned = useCallback(
+    async (event: BarcodeScanningResult) => {
+      if (scanLocked) {
+        return;
+      }
 
-    lastScanTimeRef.current = now;
-    setScanValue(event.data);
-  }, []);
+      const scannedValue = (event.data ?? '').trim();
+      if (scannedValue.length === 0) {
+        return;
+      }
+
+      if (scannedValue === lastValueRef.current) {
+        return;
+      }
+
+      setScanLocked(true);
+      setScanningEnabled(false);
+      console.log('SCAN_LOCKED', 'detected');
+      lastValueRef.current = scannedValue;
+      setScanValue(scannedValue);
+      console.log('SCAN_DETECTED', scannedValue.slice(0, 120));
+
+      setIsCreatingLead(true);
+      try {
+        const leadId = await createLeadFromScan({
+          qr: scannedValue,
+          audioUri: savedRecordingUri,
+        });
+        console.log('SCAN_INSERT_OK', leadId);
+        setScanValue(null);
+        console.log('SCAN_NAVIGATE', leadId);
+        router.replace({
+          pathname: '/leads/[id]',
+          params: { id: String(leadId), from: 'capture' },
+        } as never);
+      } catch (error) {
+        console.log(
+          'SCAN_INSERT_ERR',
+          error instanceof Error ? error.message : 'Unknown error during lead insert'
+        );
+        Alert.alert(
+          'Lead creation failed',
+          error instanceof Error ? error.message : 'An unexpected error occurred.'
+        );
+      } finally {
+        setIsCreatingLead(false);
+      }
+    },
+    [router, savedRecordingUri, scanLocked]
+  );
 
   const toggleRecording = useCallback(async () => {
     try {
@@ -48,7 +116,7 @@ export default function CaptureScreen() {
 
       const microphonePermission = await Audio.requestPermissionsAsync();
       if (!microphonePermission.granted) {
-        Alert.alert('Microphone permission needed', 'Allow microphone access to record notes.');
+        Alert.alert('Microphone permission needed', 'Allow microphone access to record audio.');
         return;
       }
 
@@ -89,7 +157,7 @@ export default function CaptureScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 12 }] }>
+    <View style={[styles.container, { paddingTop: insets.top + 12 }]}>
       <StatusBar style="light" />
 
       <View style={styles.header}>
@@ -103,7 +171,7 @@ export default function CaptureScreen() {
           facing="back"
           enableTorch={torchEnabled}
           barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-          onBarcodeScanned={onBarcodeScanned}
+          onBarcodeScanned={!scanningEnabled || scanLocked ? undefined : onBarcodeScanned}
         />
         <View style={styles.frame}>
           <View style={[styles.corner, styles.cornerTopLeft]} />
@@ -146,6 +214,12 @@ export default function CaptureScreen() {
             </Text>
           </View>
         ) : null}
+
+        {!scanningEnabled || scanLocked ? (
+          <Pressable style={styles.rescanButton} onPress={() => resetScanState('manual')}>
+            <Text style={styles.rescanButtonText}>Scan another</Text>
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );
@@ -155,76 +229,75 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#03050b',
-    paddingHorizontal: 20,
+    paddingHorizontal: 18,
   },
   header: {
-    marginTop: 12,
+    marginTop: 8,
   },
   title: {
     color: '#ffffff',
-    fontSize: 40,
+    fontSize: 22,
+    lineHeight: 28,
     fontWeight: '800',
-    letterSpacing: -1,
+    letterSpacing: -0.3,
   },
   subtitle: {
     color: '#94a3b8',
-    fontSize: 18,
+    fontSize: 12,
+    lineHeight: 17,
     marginTop: 4,
   },
   cameraWrap: {
     flex: 1,
-    marginTop: 24,
-    borderRadius: 24,
+    marginTop: 20,
+    borderRadius: 20,
     overflow: 'hidden',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(79,70,229,0.35)',
   },
   frame: {
-    width: 248,
-    height: 190,
-    borderWidth: 3,
+    width: 300,
+    height: 300,
+    borderWidth: 2,
     borderColor: '#ffffff',
-    borderRadius: 14,
-    marginBottom: 36,
+    borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(3, 5, 11, 0.18)',
+    backgroundColor: 'rgba(3, 5, 11, 0.24)',
   },
   corner: {
     position: 'absolute',
-    width: 32,
-    height: 32,
+    width: 46,
+    height: 46,
     borderColor: '#4f46e5',
   },
   cornerTopLeft: {
-    top: -3,
-    left: -3,
-    borderTopWidth: 6,
-    borderLeftWidth: 6,
-    borderTopLeftRadius: 14,
+    top: -2,
+    left: -2,
+    borderTopWidth: 8,
+    borderLeftWidth: 8,
+    borderTopLeftRadius: 22,
   },
   cornerTopRight: {
-    top: -3,
-    right: -3,
-    borderTopWidth: 6,
-    borderRightWidth: 6,
-    borderTopRightRadius: 14,
+    top: -2,
+    right: -2,
+    borderTopWidth: 8,
+    borderRightWidth: 8,
+    borderTopRightRadius: 22,
   },
   cornerBottomLeft: {
-    bottom: -3,
-    left: -3,
-    borderBottomWidth: 6,
-    borderLeftWidth: 6,
-    borderBottomLeftRadius: 14,
+    bottom: -2,
+    left: -2,
+    borderBottomWidth: 8,
+    borderLeftWidth: 8,
+    borderBottomLeftRadius: 22,
   },
   cornerBottomRight: {
-    bottom: -3,
-    right: -3,
-    borderBottomWidth: 6,
-    borderRightWidth: 6,
-    borderBottomRightRadius: 14,
+    bottom: -2,
+    right: -2,
+    borderBottomWidth: 8,
+    borderRightWidth: 8,
+    borderBottomRightRadius: 22,
   },
   scanToast: {
     position: 'absolute',
@@ -252,17 +325,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   controlsWrap: {
-    paddingTop: 14,
+    paddingTop: 12,
     paddingBottom: 10,
   },
   controlsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: 10,
   },
   controlButton: {
     flex: 1,
-    height: 52,
+    height: 54,
     borderRadius: 14,
     backgroundColor: '#334155',
     flexDirection: 'row',
@@ -272,7 +345,7 @@ const styles = StyleSheet.create({
   },
   recordButton: {
     flex: 1,
-    height: 52,
+    height: 54,
     borderRadius: 14,
     backgroundColor: '#4f46e5',
     flexDirection: 'row',
@@ -308,6 +381,22 @@ const styles = StyleSheet.create({
     color: '#e2e8f0',
     marginTop: 4,
     fontSize: 12,
+  },
+  rescanButton: {
+    marginTop: 10,
+    minHeight: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#475569',
+    backgroundColor: 'rgba(15, 23, 42, 0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rescanButtonText: {
+    color: '#e2e8f0',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   centeredState: {
     flex: 1,

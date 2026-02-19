@@ -24,6 +24,22 @@ type CompanyContextValue = {
   refreshCompanyContext: () => Promise<void>;
 };
 
+type CompanyContextSnapshot = {
+  userId: string | null;
+  companyId: string | null;
+  activeCompanyId: string | null;
+  role: AppRoleValue | null;
+  isReady: boolean;
+};
+
+let currentCompanyContextSnapshot: CompanyContextSnapshot = {
+  userId: null,
+  companyId: null,
+  activeCompanyId: null,
+  role: null,
+  isReady: false,
+};
+
 const CompanyContext = createContext<CompanyContextValue | undefined>(undefined);
 
 export function CompanyProvider({ children }: { children: ReactNode }) {
@@ -133,6 +149,16 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     };
   }, [refreshCompanyContext]);
 
+  useEffect(() => {
+    currentCompanyContextSnapshot = {
+      userId,
+      companyId,
+      activeCompanyId,
+      role,
+      isReady,
+    };
+  }, [userId, companyId, activeCompanyId, role, isReady]);
+
   const value = useMemo(
     () => ({
       userId,
@@ -158,4 +184,8 @@ export function useCompany() {
   }
 
   return context;
+}
+
+export function getCompanyContextSnapshot(): CompanyContextSnapshot {
+  return currentCompanyContextSnapshot;
 }
