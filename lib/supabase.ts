@@ -1,5 +1,28 @@
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
+import Constants from 'expo-constants';
+
+type AppExtra = {
+  EXPO_PUBLIC_SUPABASE_URL?: string;
+  EXPO_PUBLIC_SUPABASE_ANON_KEY?: string;
+};
+
+function getExpoExtra(): AppExtra {
+  const expoExtra = (Constants.expoConfig?.extra ?? {}) as AppExtra;
+  const manifest2Extra = (
+    (Constants as unknown as { manifest2?: { extra?: Record<string, unknown> } }).manifest2?.extra ?? {}
+  ) as Record<string, unknown>;
+  const embeddedExtra = (manifest2Extra.expoClient as { extra?: AppExtra } | undefined)?.extra ?? {};
+
+  return {
+    ...embeddedExtra,
+    ...expoExtra,
+  };
+}
+
+const appExtra = getExpoExtra();
+const supabaseUrl =
+  typeof appExtra.EXPO_PUBLIC_SUPABASE_URL === 'string' ? appExtra.EXPO_PUBLIC_SUPABASE_URL : '';
+const supabaseAnonKey =
+  typeof appExtra.EXPO_PUBLIC_SUPABASE_ANON_KEY === 'string' ? appExtra.EXPO_PUBLIC_SUPABASE_ANON_KEY : '';
 
 type SupabaseUser = {
   id?: string;
