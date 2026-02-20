@@ -101,7 +101,7 @@ type EqCapableQuery<TQuery> = {
 };
 
 export const LEADS_SELECT_COLUMNS =
-  'id, company_id, event_id, owner_user_id, full_name, job_title, priority_score, status, is_hot, quick_tags, follow_up_date, created_at, updated_at';
+  'id, company_id, event_id, owner_user_id, full_name, job_title, company_text, rating, priority_score, status, follow_up_date, created_at, updated_at';
 
 type InsertedLeadRow = {
   id?: string | number | null;
@@ -110,7 +110,6 @@ type InsertedLeadRow = {
 type UpdateableLeadRow = {
   id?: string | number | null;
   status?: string | null;
-  is_hot?: boolean | null;
   priority_score?: number | null;
   priority?: number | null;
 };
@@ -139,9 +138,7 @@ export type CreateLeadFromScanInput = {
 
 export type UpdateLeadInput = {
   priority_score?: number | null;
-  is_hot?: boolean | null;
   follow_up_date?: string | null;
-  quick_tags?: string[] | null;
 };
 
 function isColumnError(message: string): boolean {
@@ -467,7 +464,7 @@ export async function markLeadHotByScope<TLeadRow = UpdateableLeadRow>(
   scope: CompanyScope,
   leadId: string
 ): Promise<{ data: TLeadRow | null; error: { message?: string } | null }> {
-  const updateCandidates: Record<string, unknown>[] = [{ is_hot: true }];
+  const updateCandidates: Record<string, unknown>[] = [{ status: 'hot' }];
 
   let lastError: { message?: string } | null = null;
 
@@ -503,35 +500,16 @@ export async function updateLeadByScope<TLeadRow = Record<string, unknown>>(
   if (typeof payload.priority_score === 'number') {
     basePayload.priority_score = payload.priority_score;
   }
-  if (typeof payload.is_hot === 'boolean') {
-    basePayload.is_hot = payload.is_hot;
-  }
   if (payload.follow_up_date === null) {
     basePayload.follow_up_date = null;
   } else if (typeof payload.follow_up_date === 'string') {
     basePayload.follow_up_date = payload.follow_up_date;
   }
-  if (Array.isArray(payload.quick_tags)) {
-    basePayload.quick_tags = payload.quick_tags;
-  }
-
   const payloadCandidates: Record<string, unknown>[] = [
     { ...basePayload },
-    (() => {
-      const next = { ...basePayload };
-      delete next.quick_tags;
-      return next;
-    })(),
-    (() => {
-      const next = { ...basePayload };
-      delete next.quick_tags;
-      return next;
-    })(),
-    (() => {
-      const next = { ...basePayload };
-      delete next.quick_tags;
-      return next;
-    })(),
+    { ...basePayload },
+    { ...basePayload },
+    { ...basePayload },
   ].filter((item) => Object.keys(item).length > 0);
 
   let lastError: { message?: string } | null = null;
@@ -592,7 +570,8 @@ export function isLeadHot(row: Record<string, unknown> | null | undefined): bool
     return false;
   }
 
-  return row.is_hot === true;
+  const status = typeof row.status === 'string' ? row.status.trim().toLowerCase() : '';
+  return status === 'hot';
 }
 
 export function supportsMarkHot(row: Record<string, unknown> | null | undefined): boolean {
@@ -600,7 +579,7 @@ export function supportsMarkHot(row: Record<string, unknown> | null | undefined)
     return false;
   }
 
-  return Object.prototype.hasOwnProperty.call(row, 'is_hot');
+  return Object.prototype.hasOwnProperty.call(row, 'status');
 }
 
 export function getLeadAudioUri(row: Record<string, unknown> | null | undefined): string {
@@ -634,16 +613,16 @@ export function starsFromPriorityScore(score: number | null | undefined): number
   if (score >= 95) {
     return 5;
   }
-  if (score >= 88) {
+  if (score >= 80) {
     return 4;
   }
-  if (score >= 75) {
+  if (score >= 60) {
     return 3;
   }
-  if (score >= 60) {
+  if (score >= 40) {
     return 2;
   }
-  if (score > 0) {
+  if (score >= 20) {
     return 1;
   }
   return 0;
@@ -651,19 +630,19 @@ export function starsFromPriorityScore(score: number | null | undefined): number
 
 export function priorityScoreFromStars(stars: number): number {
   if (stars >= 5) {
-    return 99;
+    return 95;
   }
   if (stars === 4) {
-    return 92;
-  }
-  if (stars === 3) {
     return 80;
   }
+  if (stars === 3) {
+    return 60;
+  }
   if (stars === 2) {
-    return 65;
+    return 40;
   }
   if (stars === 1) {
-    return 48;
+    return 20;
   }
   return 0;
 }

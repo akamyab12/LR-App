@@ -26,7 +26,6 @@ type DbPriorityLeadRow = {
   priority?: number | null;
   stars?: number | null;
   status?: string | null;
-  quick_tags?: unknown;
   event_id?: string | number | null;
 };
 
@@ -83,14 +82,6 @@ function getLeadCompany(row: DbPriorityLeadRow): string {
 }
 
 function getHighlights(row: DbPriorityLeadRow): string[] {
-  if (Array.isArray(row.quick_tags)) {
-    return row.quick_tags
-      .filter((item): item is string => typeof item === 'string')
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0)
-      .slice(0, 3);
-  }
-
   const status = typeof row.status === 'string' ? row.status.trim() : '';
   return status ? [status] : [];
 }

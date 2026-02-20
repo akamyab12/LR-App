@@ -19,42 +19,27 @@ import SectionTitle from '@/components/ui/SectionTitle';
 import {
   LEADS_SELECT_COLUMNS,
   getLeadAudioUri,
-  hasLeadQueryScope,
-  isLeadHot,
   priorityScoreFromStars,
   starsFromPriorityScore,
-  supportsMarkHot,
 } from '@/lib/api';
 import { useCompany } from '@/lib/company-context';
 import { supabase } from '@/lib/supabase';
-import type { LeadTag } from '@/lib/types';
 
 type DbLeadDetailRow = {
   id?: string | number;
-  name?: string | null;
   full_name?: string | null;
-  title?: string | null;
   job_title?: string | null;
-  role?: string | null;
-  company?: string | null;
-  company_name?: string | null;
   company_id?: string | number | null;
-  is_hot?: boolean | null;
-  badge_label?: string | null;
+  company_text?: string | null;
+  rating?: number | null;
   priority_score?: number | null;
-  priority?: number | null;
-  stars?: number | null;
   follow_up_date?: string | null;
-  quick_tags?: unknown;
   buying_signals?: unknown;
   key_needs?: unknown;
   next_best_action?: string | null;
-  qr_value?: string | null;
-  raw_payload?: string | null;
   event_id?: string | number | null;
   created_at?: string | null;
   status?: string | null;
-  score?: number | null;
   audio_uri?: string | null;
   [key: string]: unknown;
 };
@@ -62,21 +47,10 @@ type DbLeadDetailRow = {
 type LeadAutoSavePatch = {
   full_name: string | null;
   job_title: string | null;
+  rating: number;
   priority_score: number;
-  is_hot: boolean;
-  quick_tags: LeadTag[];
   follow_up_date: string | null;
 };
-
-const ALL_TAGS: LeadTag[] = [
-  'Budget',
-  'Decision Maker',
-  'Competitor Mentioned',
-  'Timeline',
-  'Product Demo',
-  'Pricing Discussed',
-  'Urgent timeline',
-];
 
 const DEFAULT_AI_INSIGHTS = {
   buyingSignals: ['Budget approved for Q1', 'Primary decision maker', 'Requested follow-up meeting'],
@@ -84,26 +58,13 @@ const DEFAULT_AI_INSIGHTS = {
   nextBestAction: 'Schedule technical deep-dive meeting next week. Emphasize enterprise features and ROI.',
 };
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function isLeadTag(value: string): value is LeadTag {
-  return ALL_TAGS.includes(value as LeadTag);
-}
-
-function normalizeQuickTags(value: unknown): LeadTag[] {
-  if (!Array.isArray(value)) {
-    return [];
+function getNormalizedRating(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
   }
-
-  const tags = value
-    .filter((item): item is string => typeof item === 'string')
-    .map((item) => item.trim())
-    .filter(isLeadTag);
-
-  return tags;
+  return Math.max(0, Math.min(5, Math.round(value)));
 }
+
 
 function normalizeInsightList(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) {
@@ -147,16 +108,13 @@ function buildLeadPatch(input: {
   fullName: string;
   jobTitle: string;
   priorityStars: number;
-  isHot: boolean;
-  quickTags: LeadTag[];
   followUpDate: string | null;
 }): LeadAutoSavePatch {
   return {
     full_name: normalizeText(input.fullName),
     job_title: normalizeText(input.jobTitle),
+    rating: input.priorityStars,
     priority_score: priorityScoreFromStars(input.priorityStars),
-    is_hot: input.isHot,
-    quick_tags: input.quickTags,
     follow_up_date: input.followUpDate,
   };
 }
@@ -172,23 +130,10 @@ function normalizeEntityId(value: unknown): string {
 }
 
 function getPriorityScoreFromRow(row: DbLeadDetailRow | null): number | null {
-  if (!row) {
+  if (!row || typeof row.priority_score !== 'number' || !Number.isFinite(row.priority_score)) {
     return null;
   }
-
-  if (typeof row.priority_score === 'number' && Number.isFinite(row.priority_score)) {
-    return row.priority_score;
-  }
-
-  if (typeof row.priority === 'number' && Number.isFinite(row.priority)) {
-    return row.priority;
-  }
-
-  if (typeof row.score === 'number' && Number.isFinite(row.score)) {
-    return row.score;
-  }
-
-  return null;
+  return row.priority_score;
 }
 
 type LeadDetailScreenProps = {
@@ -235,7 +180,7 @@ export default function LeadDetailScreen({
   routeLeadId = null,
 }: LeadDetailScreenProps) {
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
-  const { activeCompanyId, isReady, role } = useCompany();
+  const { isReady, role } = useCompany();
   const leadId = useMemo(() => routeLeadId ?? null, [routeLeadId]);
 
   const [lead, setLead] = useState<DbLeadDetailRow | null>(null);
@@ -247,17 +192,12 @@ export default function LeadDetailScreen({
   const [isEditingJobTitle, setIsEditingJobTitle] = useState(false);
   const [fullNameDraft, setFullNameDraft] = useState('');
   const [jobTitleDraft, setJobTitleDraft] = useState('');
-  const [selectedTags, setSelectedTags] = useState<LeadTag[]>([]);
   const [priorityStars, setPriorityStars] = useState(0);
-  const [isHotDraft, setIsHotDraft] = useState(false);
   const [followUpDateDraft, setFollowUpDateDraft] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveErrorText, setSaveErrorText] = useState<string | null>(null);
   const audioUri = useMemo(() => getLeadAudioUri(lead), [lead]);
-  const leadIsHot = useMemo(() => isLeadHot(lead), [lead]);
-  const canMarkHot = useMemo(() => supportsMarkHot(lead), [lead]);
-  const availableQuickTags = useMemo(() => ALL_TAGS, []);
   const buyingSignals = useMemo(
     () => normalizeInsightList(lead?.buying_signals, DEFAULT_AI_INSIGHTS.buyingSignals),
     [lead?.buying_signals]
@@ -279,11 +219,9 @@ export default function LeadDetailScreen({
         fullName: fullNameDraft,
         jobTitle: jobTitleDraft,
         priorityStars,
-        isHot: isHotDraft,
-        quickTags: selectedTags,
         followUpDate: followUpDateDraft,
       }),
-    [followUpDateDraft, fullNameDraft, isHotDraft, jobTitleDraft, priorityStars, selectedTags]
+    [followUpDateDraft, fullNameDraft, jobTitleDraft, priorityStars]
   );
   const saveIndicatorText = useMemo(() => {
     if (saveState === 'saving') {
@@ -304,30 +242,21 @@ export default function LeadDetailScreen({
 
   const applyLeadToState = useCallback((row: DbLeadDetailRow | null) => {
     setLead(row);
-    const rowCompanyName =
-      (typeof row?.company_name === 'string' && row.company_name.trim()) ||
-      (typeof row?.company === 'string' && row.company.trim()) ||
-      '';
+    const rowCompanyName = (typeof row?.company_text === 'string' && row.company_text.trim()) || '';
     setCompanyName(rowCompanyName);
-    const initialTags = normalizeQuickTags(row?.quick_tags);
-    const priorityScore = getPriorityScoreFromRow(row);
-    const initialStars =
-      typeof row?.stars === 'number' && Number.isFinite(row.stars) && row.stars > 0
-        ? clamp(Math.round(row.stars), 0, 5)
-        : starsFromPriorityScore(priorityScore ?? 0);
+    const priorityScore = getPriorityScoreFromRow(row) ?? 0;
+    const initialRating = getNormalizedRating(row?.rating);
+    const initialStars = initialRating ?? starsFromPriorityScore(priorityScore);
     const initialFollowUpDate = normalizeDateToIso(row?.follow_up_date);
     const initialFullName = (typeof row?.full_name === 'string' && row.full_name.trim()) || '';
     const initialJobTitle = (typeof row?.job_title === 'string' && row.job_title.trim()) || '';
-    const initialIsHot = row?.is_hot === true;
 
     setFullNameDraft(initialFullName);
     setJobTitleDraft(initialJobTitle);
     setIsEditingName(false);
     setIsEditingJobTitle(false);
 
-    setSelectedTags(initialTags);
     setPriorityStars(initialStars);
-    setIsHotDraft(initialIsHot);
     setFollowUpDateDraft(initialFollowUpDate);
     setIsDirty(false);
     setSaveState('idle');
@@ -363,9 +292,7 @@ export default function LeadDetailScreen({
       setFetchError('Missing lead id');
       setFullNameDraft('');
       setJobTitleDraft('');
-      setSelectedTags([]);
       setPriorityStars(0);
-      setIsHotDraft(false);
       setFollowUpDateDraft(null);
       setIsDirty(false);
       setSaveState('idle');
@@ -410,9 +337,7 @@ export default function LeadDetailScreen({
         }
 
         const existingCompanyName =
-          (typeof row.company_name === 'string' && row.company_name.trim()) ||
-          (typeof row.company === 'string' && row.company.trim()) ||
-          '';
+          (typeof row.company_text === 'string' && row.company_text.trim()) || '';
         if (existingCompanyName) {
           setCompanyName(existingCompanyName);
         } else {
@@ -450,9 +375,7 @@ export default function LeadDetailScreen({
         setCompanyName('');
         setEventName('');
         setFetchError(error instanceof Error ? error.message : 'Unable to load lead.');
-        setSelectedTags([]);
         setPriorityStars(0);
-        setIsHotDraft(false);
         setFollowUpDateDraft(null);
         setFullNameDraft('');
         setJobTitleDraft('');
@@ -478,29 +401,8 @@ export default function LeadDetailScreen({
     goToLeadsTab();
   }, [goToLeadsTab, navigation]);
 
-  const handleMarkHot = () => {
-    if (!canMarkHot) {
-      return;
-    }
-
-    setIsHotDraft((prev) => !prev);
-    if (priorityStars < 4) {
-      setPriorityStars(4);
-    }
-    setIsDirty(true);
-    setSaveState('idle');
-    setSaveErrorText(null);
-  };
-
   const handleSave = useCallback(async () => {
     if (!leadId || !isDirty || saveState === 'saving') {
-      return;
-    }
-
-    const scope = { role, activeCompanyId };
-    if (!hasLeadQueryScope(scope)) {
-      setSaveState('error');
-      setSaveErrorText('Missing company scope');
       return;
     }
 
@@ -532,7 +434,7 @@ export default function LeadDetailScreen({
       }
       goToLeadsTab();
     }, 150);
-  }, [activeCompanyId, autoSavePatch, goToLeadsTab, isDirty, leadId, navigation, role, saveState]);
+  }, [autoSavePatch, goToLeadsTab, isDirty, leadId, navigation, saveState]);
 
   const cyclePriorityFromScore = () => {
     setPriorityStars((prev) => {
@@ -540,52 +442,6 @@ export default function LeadDetailScreen({
       return next > 5 ? 1 : next;
     });
     setIsDirty(true);
-  };
-
-  const persistQuickTags = useCallback(
-    async (nextTags: LeadTag[]) => {
-      if (!leadId || saveState === 'saving') {
-        return;
-      }
-
-      const scope = { role, activeCompanyId };
-      if (!hasLeadQueryScope(scope)) {
-        setSaveState('error');
-        setSaveErrorText('Missing company scope');
-        return;
-      }
-
-      setSaveState('saving');
-      setSaveErrorText(null);
-
-      const { error } = await supabase
-        .from('leads')
-        .update({ quick_tags: nextTags })
-        .eq('id', leadId)
-        .select('id')
-        .single();
-
-      if (error) {
-        setSaveState('error');
-        setSaveErrorText(error.message ?? 'Quick tags save failed');
-        return;
-      }
-
-      setLead((prev) => (prev ? { ...prev, quick_tags: nextTags } : prev));
-      setSaveState('saved');
-      setSaveErrorText(null);
-    },
-    [activeCompanyId, leadId, role, saveState]
-  );
-
-  const toggleTag = (tag: LeadTag) => {
-    setSaveState('idle');
-    setSaveErrorText(null);
-    setSelectedTags((prev) => {
-      const nextTags = prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag];
-      persistQuickTags(nextTags).catch(() => undefined);
-      return nextTags;
-    });
   };
 
   const renderInsightRows = (items: string[]) => {
@@ -674,11 +530,6 @@ export default function LeadDetailScreen({
               <Text style={styles.name}>{fullNameDraft.trim() || '—'}</Text>
             </Pressable>
           )}
-          {isHotDraft || leadIsHot ? (
-            <View style={styles.hotPill}>
-              <Text style={styles.hotPillText}>HOT LEAD</Text>
-            </View>
-          ) : null}
         </View>
 
         {isEditingJobTitle ? (
@@ -737,24 +588,6 @@ export default function LeadDetailScreen({
           </Text>
         </View>
 
-        <SectionTitle title="Quick Tags" titleStyle={styles.sectionTitle} style={styles.sectionSpacing} />
-        <View style={styles.tagWrap}>
-          {availableQuickTags.map((tag) => {
-            const isSelected = selectedTags.includes(tag);
-            return (
-              <Pressable
-                key={tag}
-                style={[styles.tagPill, isSelected ? styles.tagPillSelected : styles.tagPillMuted]}
-                onPress={() => toggleTag(tag)}>
-                {isSelected ? <Ionicons name="checkmark" size={16} color="#ffffff" /> : null}
-                <Text style={[styles.tagText, isSelected ? styles.tagTextSelected : styles.tagTextMuted]}>
-                  {tag}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
         <SectionTitle title="Follow-Up" titleStyle={styles.sectionTitle} style={styles.sectionSpacing} />
         <FollowUpDatePicker
           value={followUpDateDraft}
@@ -787,18 +620,6 @@ export default function LeadDetailScreen({
               <Text style={styles.metaValue}>{eventName || 'Not set'}</Text>
             </View>
           </Card>
-        ) : null}
-
-        {canMarkHot && !isHotDraft ? (
-          <Pressable style={styles.markHotButton} onPress={handleMarkHot}>
-            <Ionicons name="flame-outline" size={18} color="#ffffff" />
-            <Text style={styles.markHotButtonText}>Mark Hot</Text>
-          </Pressable>
-        ) : isHotDraft || leadIsHot ? (
-          <View style={styles.hotStatusPill}>
-            <Ionicons name="flame" size={16} color="#ffffff" />
-            <Text style={styles.hotStatusText}>Marked as Hot</Text>
-          </View>
         ) : null}
 
         <View style={styles.aiCard}>

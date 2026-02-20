@@ -29,7 +29,6 @@ type DbCompanyRow = {
 
 type DbLeadStatRow = {
   status?: string | null;
-  is_hot?: boolean | null;
   priority_score?: number | null;
   priority?: number | null;
   score?: number | null;
@@ -79,7 +78,8 @@ function getInitials(name: string): string {
 }
 
 function isHotLead(lead: DbLeadStatRow): boolean {
-  if (lead.is_hot === true) {
+  const status = typeof lead.status === 'string' ? lead.status.trim().toLowerCase() : '';
+  if (status === 'hot') {
     return true;
   }
   const scoreCandidate =

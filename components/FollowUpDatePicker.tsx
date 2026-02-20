@@ -1,7 +1,17 @@
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { useMemo, useState } from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  type StyleProp,
+  Text,
+  type TextStyle,
+  View,
+  type ViewStyle,
+} from 'react-native';
 
 type FollowUpDatePickerProps = {
   value: string | null;
@@ -9,6 +19,11 @@ type FollowUpDatePickerProps = {
   label?: string;
   disabled?: boolean;
   onPress?: () => void;
+  rowStyle?: StyleProp<ViewStyle>;
+  textStyle?: StyleProp<TextStyle>;
+  iconName?: 'calendar-outline' | 'time-outline';
+  iconColor?: string;
+  showChevron?: boolean;
 };
 
 function parseIsoDate(value: string | null): Date {
@@ -52,6 +67,11 @@ export default function FollowUpDatePicker({
   label = 'Follow up',
   disabled = false,
   onPress,
+  rowStyle,
+  textStyle,
+  iconName = 'calendar-outline',
+  iconColor = '#4f46e5',
+  showChevron = true,
 }: FollowUpDatePickerProps) {
   const [open, setOpen] = useState(false);
   const [draftDate, setDraftDate] = useState<Date>(parseIsoDate(value));
@@ -98,14 +118,14 @@ export default function FollowUpDatePicker({
   return (
     <View>
       <Pressable
-        style={[styles.row, disabled && styles.rowDisabled]}
+        style={[styles.row, rowStyle, disabled && styles.rowDisabled]}
         onPress={openPicker}
         disabled={disabled}>
         <View style={styles.left}>
-          <Ionicons name="calendar-outline" size={18} color="#4f46e5" />
-          <Text style={styles.text}>{displayText}</Text>
+          <Ionicons name={iconName} size={18} color={iconColor} />
+          <Text style={[styles.text, textStyle]}>{displayText}</Text>
         </View>
-        <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+        {showChevron ? <Ionicons name="chevron-forward" size={18} color="#94a3b8" /> : null}
       </Pressable>
 
       {Platform.OS === 'ios' && open ? (

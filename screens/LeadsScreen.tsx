@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -16,28 +16,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import FollowUpDatePicker from '@/components/FollowUpDatePicker';
 import StarRating from '@/components/StarRating';
-import {
-  hasLeadQueryScope,
-  priorityScoreFromStars,
-  starsFromPriorityScore,
-} from '@/lib/api';
+import { priorityScoreFromStars, starsFromPriorityScore } from '@/lib/api';
 import { useCompany } from '@/lib/company-context';
 import { supabase } from '@/lib/supabase';
 
 type DbLeadRow = {
   id?: string | number;
-  name?: string | null;
   full_name?: string | null;
-  title?: string | null;
   job_title?: string | null;
-  role?: string | null;
-  company?: string | null;
-  company_name?: string | null;
-  is_hot?: boolean | null;
-  badge_label?: string | null;
+  company_text?: string | null;
   priority_score?: number | null;
-  priority?: number | null;
-  stars?: number | null;
+  rating?: number | null;
+  temperature?: string | null;
   status?: string | null;
   follow_up_date?: string | null;
   company_id?: string | number | null;
@@ -46,72 +36,43 @@ type DbLeadRow = {
   [key: string]: unknown;
 };
 
-function isHotLeadRow(lead: DbLeadRow): boolean {
-  return lead.is_hot === true;
+function getLeadStatusValue(lead: DbLeadRow): string {
+  if (typeof lead.status !== 'string') {
+    return '';
+  }
+  return lead.status.trim().toLowerCase();
+}
+
+function formatLeadStatusLabel(status: string): string {
+  if (!status) {
+    return '';
+  }
+  return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
 function getLeadName(lead: DbLeadRow): string {
-  return (
-    (typeof lead.name === 'string' && lead.name.trim()) ||
-    (typeof lead.full_name === 'string' && lead.full_name.trim()) ||
-    'Unknown Lead'
-  );
+  return (typeof lead.full_name === 'string' && lead.full_name.trim()) || 'Unknown Lead';
 }
 
 function getLeadTitle(lead: DbLeadRow): string {
-  return (
-    (typeof lead.title === 'string' && lead.title.trim()) ||
-    (typeof lead.job_title === 'string' && lead.job_title.trim()) ||
-    (typeof lead.role === 'string' && lead.role.trim()) ||
-    'No title'
-  );
+  return (typeof lead.job_title === 'string' && lead.job_title.trim()) || 'No title';
 }
 
 function getLeadCompany(lead: DbLeadRow): string {
-  return (
-    (typeof lead.company === 'string' && lead.company.trim()) ||
-    (typeof lead.company_name === 'string' && lead.company_name.trim()) ||
-    'Unknown Company'
-  );
-}
-
-function getCompanyId(lead: DbLeadRow): string {
-  if (typeof lead.company_id === 'string' && lead.company_id.trim().length > 0) {
-    return lead.company_id.trim();
-  }
-  if (typeof lead.company_id === 'number' && Number.isFinite(lead.company_id)) {
-    return String(lead.company_id);
-  }
-  return '';
+  return (typeof lead.company_text === 'string' && lead.company_text.trim()) || 'Unknown Company';
 }
 
 function getPriorityScore(lead: DbLeadRow): number {
-  const value = typeof lead.priority_score === 'number' ? lead.priority_score : lead.priority;
+  const value = lead.priority_score;
   return Number.isFinite(value) ? Number(value) : 0;
 }
 
 function getStars(lead: DbLeadRow): number {
-  if (typeof lead.stars === 'number' && Number.isFinite(lead.stars) && lead.stars > 0) {
-    return Math.max(0, Math.min(5, Math.round(lead.stars)));
+  if (typeof lead.rating === 'number' && Number.isFinite(lead.rating) && lead.rating > 0) {
+    return Math.max(0, Math.min(5, Math.round(lead.rating)));
   }
 
   return starsFromPriorityScore(getPriorityScore(lead));
-}
-
-function formatFollowUpDate(value: unknown): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    return 'TBD';
-  }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-
-  const month = String(parsed.getMonth() + 1).padStart(2, '0');
-  const day = String(parsed.getDate()).padStart(2, '0');
-  const year = parsed.getFullYear();
-  return `${month}/${day}/${year}`;
 }
 
 function toFollowUpInput(value: unknown): string {
@@ -147,7 +108,7 @@ function normalizeEntityId(value: unknown): string {
 export default function LeadsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { activeCompanyId, isReady, role } = useCompany();
+  const { isReady, activeCompanyId } = useCompany();
   const [query, setQuery] = useState('');
   const [isLoadingLeads, setIsLoadingLeads] = useState(false);
   const [leads, setLeads] = useState<DbLeadRow[]>([]);
@@ -156,79 +117,58 @@ export default function LeadsScreen() {
   const [editLeadId, setEditLeadId] = useState<string | null>(null);
   const [editFullName, setEditFullName] = useState('');
   const [editJobTitle, setEditJobTitle] = useState('');
-  const [editCompanyName, setEditCompanyName] = useState('');
-  const [editCompanyDisplay, setEditCompanyDisplay] = useState('');
-  const [isCompanyNameEditable, setIsCompanyNameEditable] = useState(false);
-  const [editPriorityScore, setEditPriorityScore] = useState('0');
+  const [editCompanyText, setEditCompanyText] = useState('');
   const [editRating, setEditRating] = useState(0);
-  const [editIsHot, setEditIsHot] = useState(false);
+  const [editTemperature, setEditTemperature] = useState<'hot' | 'medium' | 'cold'>('medium');
   const [editFollowUpDate, setEditFollowUpDate] = useState<string | null>(null);
-  const [isCompanyNameColumnAvailable, setIsCompanyNameColumnAvailable] = useState(false);
   const [editLeadOriginal, setEditLeadOriginal] = useState<DbLeadRow | null>(null);
-  const [companyNameById, setCompanyNameById] = useState<Record<string, string>>({});
 
   const loadLeads = useCallback(async () => {
     if (!isReady) {
       return;
     }
 
-    const scope = { role, activeCompanyId };
-    if (!hasLeadQueryScope(scope)) {
+    setIsLoadingLeads(true);
+    const CURRENT_COMPANY_ID =
+      typeof activeCompanyId === 'string' && activeCompanyId.trim().length > 0
+        ? activeCompanyId.trim()
+        : null;
+
+    if (!CURRENT_COMPANY_ID) {
       setLeads([]);
       setIsLoadingLeads(false);
       return;
     }
 
-    setIsLoadingLeads(true);
-    const { data: sessionData } = await supabase.auth.getSession();
-    const session = sessionData.session;
-    const CURRENT_COMPANY_ID = activeCompanyId;
-    let leadsQuery = supabase
+    const leadsBaseQuery = supabase
       .from('leads')
-      .select('id, full_name, company_id, owner_user_id, created_at');
+      .select(
+        'id, full_name, job_title, priority_score, rating, temperature, status, follow_up_date, company_text, company_id, owner_user_id, created_at'
+      ) as unknown as {
+      eq: (column: string, value: unknown) => {
+        order: (column: string, options?: { ascending?: boolean }) => {
+          limit: (value: number) => Promise<{ data: DbLeadRow[] | null; error: unknown }>;
+        };
+      };
+      order: (column: string, options?: { ascending?: boolean }) => {
+        limit: (value: number) => Promise<{ data: DbLeadRow[] | null; error: unknown }>;
+      };
+    };
 
-    if (role !== 'platform_admin' && typeof CURRENT_COMPANY_ID === 'string' && CURRENT_COMPANY_ID.trim().length > 0) {
-      leadsQuery = leadsQuery.eq('company_id', CURRENT_COMPANY_ID.trim());
-    }
+    const leadsScopedQuery = leadsBaseQuery.eq('company_id', CURRENT_COMPANY_ID) as unknown as {
+      order: (column: string, options?: { ascending?: boolean }) => {
+        limit: (value: number) => Promise<{ data: DbLeadRow[] | null; error: unknown }>;
+      };
+    };
 
-    const { data, error } = await leadsQuery.limit(50);
-    console.log('LEADS_FETCH_DEBUG', {
-      userId: session?.user?.id ?? null,
-      companyId: CURRENT_COMPANY_ID ?? null,
-      error,
-      count: data?.length ?? 0,
-      sample: data?.[0] ?? null,
-    });
-    const rows = Array.isArray(data) ? (data as DbLeadRow[]) : [];
-    const companyIds = Array.from(new Set(rows.map(getCompanyId).filter((value) => value.length > 0)));
-    let companyMap: Record<string, string> = {};
+    const { data } = await leadsScopedQuery
+      .order('created_at', { ascending: false })
+      .limit(100);
 
-    if (companyIds.length > 0) {
-      const companyRows = await Promise.all(
-        companyIds.map(async (companyId) => {
-          const { data: companyRow } = await supabase
-            .from('companies')
-            .select('name')
-            .eq('id', companyId)
-            .maybeSingle<{ name?: string | null }>();
-          return {
-            id: companyId,
-            name: typeof companyRow?.name === 'string' ? companyRow.name.trim() : '',
-          };
-        })
-      );
-      companyMap = companyRows.reduce<Record<string, string>>((acc, row) => {
-        if (row.id && row.name) {
-          acc[row.id] = row.name;
-        }
-        return acc;
-      }, {});
-    }
-    setCompanyNameById(companyMap);
-    setLeads(rows);
+    setLeads(data ?? []);
 
     setIsLoadingLeads(false);
-  }, [isReady, role, activeCompanyId]);
+  }, [isReady, activeCompanyId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -239,28 +179,6 @@ export default function LeadsScreen() {
       return () => undefined;
     }, [loadLeads])
   );
-
-  useEffect(() => {
-    let isActive = true;
-
-    const detectCompanyNameColumn = async () => {
-      const { error } = await supabase.from('leads').select('id').limit(1);
-      if (!isActive) {
-        return;
-      }
-      setIsCompanyNameColumnAvailable(!error);
-    };
-
-    detectCompanyNameColumn().catch(() => {
-      if (isActive) {
-        setIsCompanyNameColumnAvailable(false);
-      }
-    });
-
-    return () => {
-      isActive = false;
-    };
-  }, []);
 
   const openEditModal = useCallback(
     async (lead: DbLeadRow) => {
@@ -284,49 +202,26 @@ export default function LeadsScreen() {
         }
       }
 
-      let leadSnapshot: DbLeadRow = lead;
-      const resolvedCompanyFromMap = companyNameById[getCompanyId(lead)];
       setEditLeadId(id);
       setEditFullName(getLeadName(lead));
-      setEditJobTitle(
-        (typeof lead.job_title === 'string' && lead.job_title.trim()) ||
-          (typeof lead.title === 'string' && lead.title.trim()) ||
-          ''
-      );
-      setEditCompanyDisplay(resolvedCompanyFromMap || resolvedCompany || 'Unknown Company');
-      if (isCompanyNameColumnAvailable) {
-        const { data: companyNameRow } = await supabase
-          .from('leads')
-          .select('company_name')
-          .eq('id', id)
-          .maybeSingle<{ company_name?: string | null }>();
-        setIsCompanyNameEditable(true);
-        setEditCompanyName(
-          (typeof companyNameRow?.company_name === 'string' && companyNameRow.company_name.trim()) ||
-            (typeof lead.company_name === 'string' && lead.company_name.trim()) ||
-            ''
-        );
-        leadSnapshot = {
-          ...lead,
-          company_name:
-            (typeof companyNameRow?.company_name === 'string' && companyNameRow.company_name.trim()) ||
-            (typeof lead.company_name === 'string' && lead.company_name.trim()) ||
-            null,
-        };
-      } else {
-        setIsCompanyNameEditable(false);
-        setEditCompanyName('');
-      }
-      setEditLeadOriginal(leadSnapshot);
+      setEditJobTitle((typeof lead.job_title === 'string' && lead.job_title.trim()) || '');
+      const leadCompanyText =
+        typeof lead.company_text === 'string' && lead.company_text.trim().length > 0
+          ? lead.company_text.trim()
+          : resolvedCompany || '';
+      setEditCompanyText(leadCompanyText);
+      setEditLeadOriginal(lead);
 
-      const priorityScore = getPriorityScore(lead);
-      setEditPriorityScore(String(priorityScore));
       setEditRating(getStars(lead));
-      setEditIsHot(lead.is_hot === true);
+      const normalizedTemperature =
+        typeof lead.temperature === 'string' ? lead.temperature.trim().toLowerCase() : 'medium';
+      setEditTemperature(
+        normalizedTemperature === 'hot' || normalizedTemperature === 'cold' ? normalizedTemperature : 'medium'
+      );
       setEditFollowUpDate(toFollowUpInput(lead.follow_up_date) || null);
       setIsEditVisible(true);
     },
-    [isCompanyNameColumnAvailable, companyNameById]
+    []
   );
 
   const closeEditModal = useCallback(() => {
@@ -338,16 +233,97 @@ export default function LeadsScreen() {
     setEditLeadOriginal(null);
   }, [isEditSaving]);
 
+  const updateLeadInState = useCallback((leadId: string, patch: Partial<DbLeadRow>) => {
+    setLeads((currentLeads) =>
+      currentLeads.map((lead) => {
+        const currentId = lead.id != null ? String(lead.id) : '';
+        if (currentId !== leadId) {
+          return lead;
+        }
+        return {
+          ...lead,
+          ...patch,
+        };
+      })
+    );
+  }, []);
+
+  const saveLeadPatch = useCallback(
+    async (leadId: string, patch: Partial<DbLeadRow>, rollbackPatch: Partial<DbLeadRow>) => {
+      updateLeadInState(leadId, patch);
+
+      const { error } = await supabase
+        .from('leads')
+        .update(patch)
+        .eq('id', leadId)
+        .select('id')
+        .single<{ id: string }>();
+
+      if (error) {
+        updateLeadInState(leadId, rollbackPatch);
+        Alert.alert('Update failed', error.message ?? 'Unable to update lead.');
+        return false;
+      }
+
+      return true;
+    },
+    [updateLeadInState]
+  );
+
+  const handleCardRatingChange = useCallback(
+    async (leadId: string, nextRating: number, currentRating: number) => {
+      if (!leadId || nextRating === currentRating) {
+        return;
+      }
+
+      const currentLead = leads.find((lead) => (lead.id != null ? String(lead.id) : '') === leadId);
+      const currentPriorityScore =
+        currentLead && typeof currentLead.priority_score === 'number' && Number.isFinite(currentLead.priority_score)
+          ? currentLead.priority_score
+          : priorityScoreFromStars(currentRating);
+      const nextPriorityScore = priorityScoreFromStars(nextRating);
+
+      await saveLeadPatch(
+        leadId,
+        { rating: nextRating, priority_score: nextPriorityScore },
+        { rating: currentRating, priority_score: currentPriorityScore }
+      );
+    },
+    [leads, saveLeadPatch]
+  );
+
+  const handleCardFollowUpChange = useCallback(
+    async (leadId: string, nextDate: string | null, currentDate: string | null) => {
+      if (!leadId) {
+        return;
+      }
+
+      const normalizedNextDate =
+        typeof nextDate === 'string' && nextDate.trim().length > 0 ? nextDate.trim() : null;
+      const normalizedCurrentDate =
+        typeof currentDate === 'string' && currentDate.trim().length > 0 ? currentDate.trim() : null;
+
+      if (normalizedNextDate === normalizedCurrentDate) {
+        return;
+      }
+
+      await saveLeadPatch(
+        leadId,
+        { follow_up_date: normalizedNextDate },
+        { follow_up_date: normalizedCurrentDate }
+      );
+    },
+    [saveLeadPatch]
+  );
+
   const handleEditSave = useCallback(async () => {
     if (!editLeadId || isEditSaving || !editLeadOriginal) {
       return;
     }
 
-    const rawPriority = Number.parseInt(editPriorityScore.trim(), 10);
-    const safePriority = Number.isFinite(rawPriority) && rawPriority >= 0 ? Math.min(100, rawPriority) : 0;
-    const resolvedPriority = editRating > 0 ? priorityScoreFromStars(editRating) : safePriority;
     const normalizedFullName = editFullName.trim() || 'New Lead';
     const normalizedJobTitle = editJobTitle.trim();
+    const normalizedCompanyText = editCompanyText.trim() || null;
     const normalizedFollowUpDate =
       editFollowUpDate && editFollowUpDate.trim().length > 0 ? editFollowUpDate.trim() : null;
 
@@ -358,28 +334,28 @@ export default function LeadsScreen() {
     }
     if (
       normalizedJobTitle !==
-      ((typeof editLeadOriginal.job_title === 'string' && editLeadOriginal.job_title.trim()) ||
-        (typeof editLeadOriginal.title === 'string' && editLeadOriginal.title.trim()) ||
-        '')
+      ((typeof editLeadOriginal.job_title === 'string' && editLeadOriginal.job_title.trim()) || '')
     ) {
       patch.job_title = normalizedJobTitle;
     }
-    if (resolvedPriority !== getPriorityScore(editLeadOriginal)) {
-      patch.priority_score = resolvedPriority;
+    if (editRating !== getStars(editLeadOriginal)) {
+      patch.rating = editRating;
+      patch.priority_score = priorityScoreFromStars(editRating);
     }
-    if (editIsHot !== (editLeadOriginal.is_hot === true)) {
-      patch.is_hot = editIsHot;
+    const originalTemperature =
+      typeof editLeadOriginal.temperature === 'string' ? editLeadOriginal.temperature.trim().toLowerCase() : 'medium';
+    if (editTemperature !== (originalTemperature === 'hot' || originalTemperature === 'cold' ? originalTemperature : 'medium')) {
+      patch.temperature = editTemperature;
     }
     if (normalizedFollowUpDate !== (toFollowUpInput(editLeadOriginal.follow_up_date) || null)) {
       patch.follow_up_date = normalizedFollowUpDate;
     }
-    if (isCompanyNameEditable) {
-      const normalizedCompanyName = editCompanyName.trim();
-      const originalCompanyName =
-        typeof editLeadOriginal.company_name === 'string' ? editLeadOriginal.company_name.trim() : '';
-      if (normalizedCompanyName !== originalCompanyName) {
-        patch.company_name = normalizedCompanyName;
-      }
+    const originalCompanyText =
+      typeof editLeadOriginal.company_text === 'string' && editLeadOriginal.company_text.trim().length > 0
+        ? editLeadOriginal.company_text.trim()
+        : null;
+    if (normalizedCompanyText !== originalCompanyText) {
+      patch.company_text = normalizedCompanyText;
     }
 
     if (Object.keys(patch).length === 0) {
@@ -403,6 +379,8 @@ export default function LeadsScreen() {
       return;
     }
 
+    updateLeadInState(editLeadId, patch);
+
     setIsEditVisible(false);
     setEditLeadId(null);
     setEditLeadOriginal(null);
@@ -411,15 +389,14 @@ export default function LeadsScreen() {
     editLeadId,
     isEditSaving,
     editLeadOriginal,
-    editPriorityScore,
     editRating,
     editFullName,
     editJobTitle,
-    editCompanyName,
-    isCompanyNameEditable,
-    editIsHot,
+    editCompanyText,
+    editTemperature,
     editFollowUpDate,
     loadLeads,
+    updateLeadInState,
   ]);
 
   const filteredLeads = useMemo(() => {
@@ -429,18 +406,22 @@ export default function LeadsScreen() {
     }
 
     return leads.filter((lead) => {
-      const haystack = [getLeadName(lead), getLeadTitle(lead), getLeadCompany(lead)].join(' ').toLowerCase();
+      const companyDisplay = getLeadCompany(lead);
+      const haystack = [getLeadName(lead), getLeadTitle(lead), companyDisplay].join(' ').toLowerCase();
       return haystack.includes(search);
     });
   }, [leads, query]);
 
-  const hotLeadCount = useMemo(() => leads.filter((lead) => isHotLeadRow(lead)).length, [leads]);
+  const leadStatusCount = useMemo(
+    () => leads.filter((lead) => getLeadStatusValue(lead) === 'lead').length,
+    [leads]
+  );
 
   const isLoading = !isReady || isLoadingLeads;
 
   return (
     <View style={styles.page}>
-      <View style={[styles.headerArea, { paddingTop: insets.top + 10 }]}>
+      <View style={[styles.headerArea, { paddingTop: insets.top + 14 }]}>
         <Text style={styles.title}>All Leads</Text>
 
         <View style={styles.searchWrap}>
@@ -460,7 +441,7 @@ export default function LeadsScreen() {
             <Text style={styles.statLabel}>Total Leads</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statValue}>{hotLeadCount}</Text>
+            <Text style={styles.statValue}>{leadStatusCount}</Text>
             <Text style={styles.statLabel}>Hot Leads</Text>
           </View>
         </View>
@@ -477,13 +458,8 @@ export default function LeadsScreen() {
           showsVerticalScrollIndicator={false}>
           {filteredLeads.map((lead, index) => {
             const id = lead.id != null ? String(lead.id) : '';
-            const isHot = isHotLeadRow(lead);
-            const badgeLabel =
-              typeof lead.badge_label === 'string' && lead.badge_label.trim().length > 0
-                ? lead.badge_label
-                : isHot
-                  ? 'Hot'
-                  : 'Lead';
+            const statusValue = getLeadStatusValue(lead);
+            const statusLabel = formatLeadStatusLabel(statusValue);
             const priority = getPriorityScore(lead);
 
             return (
@@ -491,6 +467,10 @@ export default function LeadsScreen() {
                 key={id || `lead-${index}`}
                 style={styles.leadCard}
                 disabled={!id}
+                onLongPress={() => {
+                  openEditModal(lead).catch(() => undefined);
+                }}
+                delayLongPress={320}
                 onPress={() =>
                   id
                     ? router.push({
@@ -501,40 +481,61 @@ export default function LeadsScreen() {
                 }>
                 <View style={styles.cardTopRow}>
                   <Text style={styles.nameText}>{getLeadName(lead)}</Text>
-                  <View style={styles.cardActions}>
-                    <Pressable
-                      style={styles.editButton}
-                      onPress={(event) => {
-                        event.stopPropagation?.();
-                        openEditModal(lead).catch(() => undefined);
-                      }}>
-                      <Text style={styles.editButtonText}>Edit</Text>
-                    </Pressable>
-                    <View style={[styles.badge, isHot ? styles.hotBadge : styles.followUpBadge]}>
-                      <Text style={styles.badgeText}>{badgeLabel}</Text>
+                  {statusLabel ? (
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        statusValue === 'hot'
+                          ? styles.statusBadgeHot
+                          : statusValue === 'lead'
+                            ? styles.statusBadgeLead
+                            : styles.statusBadgeNeutral,
+                      ]}>
+                      <Text style={styles.badgeText}>{statusLabel}</Text>
                     </View>
-                  </View>
+                  ) : null}
                 </View>
 
                 <Text style={styles.titleText}>{getLeadTitle(lead)}</Text>
-                <Text style={styles.company}>{companyNameById[getCompanyId(lead)] || getLeadCompany(lead)}</Text>
+                <Text style={styles.company}>
+                  {getLeadCompany(lead)}
+                </Text>
 
                 <View style={styles.scoreRow}>
                   <View style={styles.scoreBlock}>
                     <View style={styles.scoreValueRow}>
-                      <Ionicons name="trending-up-outline" size={16} color="#4f46e5" />
+                      <Ionicons name="trending-up-outline" size={19} color="#4f46e5" />
                       <Text style={styles.scoreValue}>{priority}</Text>
                     </View>
                     <Text style={styles.scoreLabel}>Priority</Text>
                   </View>
 
-                  <StarRating value={getStars(lead)} size={20} />
+                  <StarRating
+                    value={getStars(lead)}
+                    size={20}
+                    onChange={(nextRating) => {
+                      void handleCardRatingChange(id, nextRating, getStars(lead));
+                    }}
+                  />
                 </View>
-
-                <View style={styles.followUpPill}>
-                  <Ionicons name="time-outline" size={16} color="#6b7280" />
-                  <Text style={styles.followUpText}>Follow up: {formatFollowUpDate(lead.follow_up_date)}</Text>
-                </View>
+                <FollowUpDatePicker
+                  value={toFollowUpInput(lead.follow_up_date) || null}
+                  label="Follow up"
+                  disabled={!id}
+                  onPress={() => console.log('FollowUpDatePicker pressed', id)}
+                  onChange={(nextDate) => {
+                    void handleCardFollowUpChange(
+                      id,
+                      nextDate,
+                      toFollowUpInput(lead.follow_up_date) || null
+                    );
+                  }}
+                  iconName="time-outline"
+                  iconColor="#64748b"
+                  showChevron={false}
+                  rowStyle={styles.followUpPill}
+                  textStyle={styles.followUpText}
+                />
               </Pressable>
             );
           })}
@@ -553,45 +554,45 @@ export default function LeadsScreen() {
             <TextInput style={styles.modalInput} value={editJobTitle} onChangeText={setEditJobTitle} />
 
             <Text style={styles.modalFieldLabel}>Company</Text>
-            {isCompanyNameEditable ? (
-              <TextInput style={styles.modalInput} value={editCompanyName} onChangeText={setEditCompanyName} />
-            ) : (
-              <View style={styles.modalReadOnly}>
-                <Text style={styles.modalReadOnlyText}>{editCompanyDisplay || 'Unknown Company'}</Text>
-              </View>
-            )}
-
-            <Text style={styles.modalFieldLabel}>Priority Score</Text>
             <TextInput
               style={styles.modalInput}
-              value={editPriorityScore}
-              onChangeText={(value) => {
-                setEditPriorityScore(value);
-                const parsed = Number.parseInt(value.trim(), 10);
-                if (Number.isFinite(parsed)) {
-                  setEditRating(starsFromPriorityScore(Math.max(0, Math.min(100, parsed))));
-                }
-              }}
-              keyboardType="number-pad"
+              value={editCompanyText}
+              onChangeText={setEditCompanyText}
+              placeholder="Company"
+              placeholderTextColor="#94a3b8"
             />
+
+            <Text style={styles.modalFieldLabel}>Rating</Text>
             <View style={styles.modalRatingRow}>
               <StarRating
                 value={editRating}
                 size={22}
                 onChange={(value) => {
                   setEditRating(value);
-                  setEditPriorityScore(String(priorityScoreFromStars(value)));
                 }}
               />
             </View>
 
-            <Text style={styles.modalFieldLabel}>Hot Lead</Text>
-            <Pressable style={styles.hotToggleRow} onPress={() => setEditIsHot((prev) => !prev)}>
-              <Text style={styles.hotToggleText}>{editIsHot ? 'On' : 'Off'}</Text>
-              <View style={[styles.hotToggleSwitch, editIsHot && styles.hotToggleSwitchOn]}>
-                <View style={[styles.hotToggleKnob, editIsHot && styles.hotToggleKnobOn]} />
-              </View>
-            </Pressable>
+            <Text style={styles.modalFieldLabel}>Temperature</Text>
+            <View style={styles.temperatureRow}>
+              {(['hot', 'medium', 'cold'] as const).map((value) => (
+                <Pressable
+                  key={value}
+                  style={[
+                    styles.temperatureSegment,
+                    editTemperature === value && styles.temperatureSegmentActive,
+                  ]}
+                  onPress={() => setEditTemperature(value)}>
+                  <Text
+                    style={[
+                      styles.temperatureSegmentText,
+                      editTemperature === value && styles.temperatureSegmentTextActive,
+                    ]}>
+                    {value[0].toUpperCase() + value.slice(1)}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
 
             <Text style={styles.modalFieldLabel}>Follow Up Date</Text>
             <FollowUpDatePicker
@@ -620,62 +621,62 @@ export default function LeadsScreen() {
 const styles = StyleSheet.create({
   page: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#f3f4f6',
   },
   headerArea: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 26,
     paddingTop: 18,
-    paddingBottom: 14,
+    paddingBottom: 18,
     borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    borderBottomColor: '#e4e7ec',
     backgroundColor: '#ffffff',
   },
   title: {
-    fontSize: 56,
-    lineHeight: 62,
-    letterSpacing: -0.9,
+    fontSize: 32,
+    lineHeight: 38,
+    letterSpacing: -0.4,
     fontWeight: '800',
     color: '#0f172a',
   },
   searchWrap: {
-    marginTop: 16,
+    marginTop: 18,
     backgroundColor: '#f1f5f9',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    height: 50,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    height: 56,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
     borderWidth: 1,
     borderColor: '#e5e7eb',
   },
   searchInput: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 15,
     color: '#0f172a',
   },
   statsRow: {
-    marginTop: 14,
+    marginTop: 16,
     flexDirection: 'row',
-    gap: 12,
+    gap: 14,
   },
   statCard: {
     flex: 1,
-    borderRadius: 14,
+    borderRadius: 18,
     backgroundColor: '#f1f5f9',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
   statValue: {
-    fontSize: 28,
-    lineHeight: 32,
+    fontSize: 24,
+    lineHeight: 30,
     fontWeight: '800',
     color: '#0f172a',
   },
   statLabel: {
-    marginTop: 4,
+    marginTop: 6,
     color: '#475569',
-    fontSize: 14,
+    fontSize: 13,
     lineHeight: 18,
     fontWeight: '600',
   },
@@ -684,45 +685,29 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: 18,
-    paddingTop: 16,
+    paddingTop: 14,
     paddingBottom: 26,
     gap: 16,
   },
   leadCard: {
-    borderRadius: 18,
+    borderRadius: 28,
     backgroundColor: '#ffffff',
-    padding: 16,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 18,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#e5e7eb',
     shadowColor: '#000000',
     shadowOpacity: 0.06,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 2,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
   },
   cardTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  cardActions: {
-    alignItems: 'flex-end',
-    gap: 8,
-  },
-  editButton: {
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    backgroundColor: '#f8fafc',
-  },
-  editButtonText: {
-    color: '#334155',
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '700',
+    alignItems: 'center',
+    gap: 12,
   },
   nameText: {
     flex: 1,
@@ -731,44 +716,49 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0f172a',
   },
-  badge: {
-    borderRadius: 16,
-    minWidth: 84,
+  statusBadge: {
+    borderRadius: 999,
+    minWidth: 76,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: 9,
   },
-  hotBadge: {
-    backgroundColor: '#ff234f',
+  statusBadgeHot: {
+    backgroundColor: '#ff2d3f',
   },
-  followUpBadge: {
+  statusBadgeLead: {
     backgroundColor: '#ff5a00',
+  },
+  statusBadgeNeutral: {
+    backgroundColor: '#4f46e5',
   },
   badgeText: {
     color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '700',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '800',
   },
   titleText: {
-    marginTop: 6,
-    fontSize: 20,
-    lineHeight: 25,
+    marginTop: 10,
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: '700',
     color: '#1f2937',
   },
   company: {
-    marginTop: 2,
+    marginTop: 4,
     fontSize: 16,
     lineHeight: 21,
     fontWeight: '600',
     color: '#6b7280',
   },
   scoreRow: {
-    marginTop: 14,
+    marginTop: 18,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 12,
   },
   scoreBlock: {
     alignItems: 'flex-start',
@@ -776,34 +766,34 @@ const styles = StyleSheet.create({
   scoreValueRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 8,
   },
   scoreValue: {
-    fontSize: 28,
-    lineHeight: 30,
+    fontSize: 44,
+    lineHeight: 48,
     fontWeight: '800',
     color: '#0f172a',
   },
   scoreLabel: {
     marginTop: 2,
-    fontSize: 13,
-    lineHeight: 17,
+    fontSize: 14,
+    lineHeight: 18,
     color: '#64748b',
     fontWeight: '700',
   },
   followUpPill: {
-    marginTop: 14,
-    borderRadius: 12,
+    marginTop: 16,
+    borderRadius: 22,
     backgroundColor: '#f1f5f9',
-    paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 10,
   },
   followUpText: {
-    fontSize: 14,
-    lineHeight: 18,
+    fontSize: 16,
+    lineHeight: 20,
     fontWeight: '700',
     color: '#1f2937',
   },
@@ -876,43 +866,35 @@ const styles = StyleSheet.create({
     marginTop: 8,
     alignItems: 'flex-start',
   },
-  hotToggleRow: {
+  temperatureRow: {
     marginTop: 8,
-    minHeight: 42,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#dbe2ea',
     backgroundColor: '#f8fafc',
-    paddingHorizontal: 12,
+    padding: 4,
     flexDirection: 'row',
+    gap: 6,
+  },
+  temperatureSegment: {
+    flex: 1,
+    minHeight: 34,
+    borderRadius: 8,
     alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  hotToggleText: {
-    color: '#334155',
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: '700',
-  },
-  hotToggleSwitch: {
-    width: 42,
-    height: 24,
-    borderRadius: 999,
-    backgroundColor: '#cbd5e1',
-    paddingHorizontal: 2,
     justifyContent: 'center',
   },
-  hotToggleSwitchOn: {
+  temperatureSegmentActive: {
     backgroundColor: '#4f46e5',
   },
-  hotToggleKnob: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#ffffff',
+  temperatureSegmentText: {
+    color: '#334155',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '700',
+    textTransform: 'capitalize',
   },
-  hotToggleKnobOn: {
-    alignSelf: 'flex-end',
+  temperatureSegmentTextActive: {
+    color: '#ffffff',
   },
   modalActions: {
     marginTop: 14,
