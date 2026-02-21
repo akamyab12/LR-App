@@ -101,7 +101,7 @@ type EqCapableQuery<TQuery> = {
 };
 
 export const LEADS_SELECT_COLUMNS =
-  'id, company_id, event_id, owner_user_id, full_name, job_title, company_text, rating, priority_score, status, follow_up_date, created_at, updated_at';
+  'id, company_id, event_id, owner_user_id, full_name, job_title, company_text, rating, priority_score, status, follow_up_date, enriched_job_title, enriched_seniority, enriched_company_size, enriched_industry, enriched_linkedin_url, enriched_company_domain, enriched_score, created_at, updated_at';
 
 type InsertedLeadRow = {
   id?: string | number | null;

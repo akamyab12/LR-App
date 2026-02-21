@@ -3,6 +3,7 @@ import { useNavigation, type NavigationProp, type ParamListBase } from '@react-n
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -41,6 +42,13 @@ type DbLeadDetailRow = {
   created_at?: string | null;
   status?: string | null;
   audio_uri?: string | null;
+  enriched_job_title?: string | null;
+  enriched_seniority?: string | null;
+  enriched_company_size?: string | null;
+  enriched_industry?: string | null;
+  enriched_linkedin_url?: string | null;
+  enriched_company_domain?: string | null;
+  enriched_score?: number | null;
   [key: string]: unknown;
 };
 
@@ -57,6 +65,69 @@ const DEFAULT_AI_INSIGHTS = {
   keyNeeds: ['Engineering stack upgrade'],
   nextBestAction: 'Schedule technical deep-dive meeting next week. Emphasize enterprise features and ROI.',
 };
+
+type EnrichmentItem = {
+  key: string;
+  label: string;
+  value: string;
+  url?: string;
+};
+
+function normalizeValue(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeHttpUrl(rawValue: unknown): string | null {
+  const value = normalizeValue(rawValue);
+  if (!value) {
+    return null;
+  }
+
+  const withProtocol = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  try {
+    const parsed = new URL(withProtocol);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    parsed.protocol = 'https:';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCompanyDomain(rawValue: unknown): { url: string; label: string } | null {
+  const url = normalizeHttpUrl(rawValue);
+  if (!url) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname) {
+      return null;
+    }
+    return {
+      url: `https://${parsed.hostname}`,
+      label: parsed.hostname,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function formatUrlLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}${parsed.pathname === '/' ? '' : parsed.pathname}`;
+  } catch {
+    return url;
+  }
+}
 
 function getNormalizedRating(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -212,6 +283,61 @@ export default function LeadDetailScreen({
       DEFAULT_AI_INSIGHTS.nextBestAction,
     [lead?.next_best_action]
   );
+  const enrichmentItems = useMemo<EnrichmentItem[]>(() => {
+    const items: EnrichmentItem[] = [];
+    const pushText = (key: string, label: string, value: unknown) => {
+      const normalized = normalizeValue(value);
+      if (!normalized) {
+        return;
+      }
+      items.push({ key, label, value: normalized });
+    };
+
+    pushText('job_title', 'Job Title', lead?.enriched_job_title);
+    pushText('seniority', 'Seniority', lead?.enriched_seniority);
+    pushText('company_size', 'Company Size', lead?.enriched_company_size);
+    pushText('industry', 'Industry', lead?.enriched_industry);
+
+    const companyDomain = normalizeCompanyDomain(lead?.enriched_company_domain);
+    if (companyDomain) {
+      items.push({
+        key: 'company_domain',
+        label: 'Company Domain',
+        value: companyDomain.label,
+        url: companyDomain.url,
+      });
+    }
+
+    const linkedinUrl = normalizeHttpUrl(lead?.enriched_linkedin_url);
+    if (linkedinUrl) {
+      items.push({
+        key: 'linkedin_url',
+        label: 'LinkedIn',
+        value: formatUrlLabel(linkedinUrl),
+        url: linkedinUrl,
+      });
+    }
+
+    if (typeof lead?.enriched_score === 'number' && Number.isFinite(lead.enriched_score)) {
+      const score = Math.max(0, Math.min(100, Math.round(lead.enriched_score)));
+      items.push({
+        key: 'score',
+        label: 'Confidence Score',
+        value: `${score}/100`,
+      });
+    }
+
+    return items;
+  }, [
+    lead?.enriched_company_domain,
+    lead?.enriched_company_size,
+    lead?.enriched_industry,
+    lead?.enriched_job_title,
+    lead?.enriched_linkedin_url,
+    lead?.enriched_score,
+    lead?.enriched_seniority,
+  ]);
+  const hasEnrichment = enrichmentItems.length > 0;
   const basePriorityScore = useMemo(() => getPriorityScoreFromRow(lead), [lead]);
   const autoSavePatch = useMemo(
     () =>
@@ -239,6 +365,22 @@ export default function LeadDetailScreen({
   const goToLeadsTab = useCallback(() => {
     goToLeads(navigation);
   }, [navigation]);
+
+  const openExternalLink = useCallback(async (url: string | undefined) => {
+    if (!url) {
+      return;
+    }
+
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        return;
+      }
+      await Linking.openURL(url);
+    } catch {
+      // no-op: guard invalid links silently
+    }
+  }, []);
 
   const applyLeadToState = useCallback((row: DbLeadDetailRow | null) => {
     setLead(row);
@@ -599,17 +741,6 @@ export default function LeadDetailScreen({
             setSaveErrorText(null);
           }}
         />
-
-        <SectionTitle title="Conversation" titleStyle={styles.sectionTitle} style={styles.sectionSpacing} />
-        <Card style={styles.conversationCard}>
-          <View style={styles.bigMicButton}>
-            <Ionicons name="mic-outline" size={32} color="#ffffff" />
-          </View>
-          <Text style={styles.conversationHint}>No conversation captured yet.</Text>
-          <Text style={styles.audioHint} numberOfLines={1}>
-            {audioUri ? `Audio: ${audioUri}` : 'Audio: not attached'}
-          </Text>
-        </Card>
         {role !== 'exhibitor' ? (
           <SectionTitle title="Event" titleStyle={styles.sectionTitle} style={styles.sectionSpacing} />
         ) : null}
@@ -619,6 +750,27 @@ export default function LeadDetailScreen({
               <Text style={styles.metaLabel}>Event</Text>
               <Text style={styles.metaValue}>{eventName || 'Not set'}</Text>
             </View>
+          </Card>
+        ) : null}
+        {hasEnrichment ? (
+          <SectionTitle title="Enrichment" titleStyle={styles.sectionTitle} style={styles.sectionSpacing} />
+        ) : null}
+        {hasEnrichment ? (
+          <Card style={styles.enrichmentCard}>
+            {enrichmentItems.map((item, index) => (
+              <View
+                key={item.key}
+                style={[styles.enrichmentRow, index > 0 && styles.enrichmentRowDivider]}>
+                <Text style={styles.enrichmentLabel}>{item.label}</Text>
+                {item.url ? (
+                  <Pressable onPress={() => void openExternalLink(item.url)}>
+                    <Text style={styles.enrichmentLink}>{item.value}</Text>
+                  </Pressable>
+                ) : (
+                  <Text style={styles.enrichmentValue}>{item.value}</Text>
+                )}
+              </View>
+            ))}
           </Card>
         ) : null}
 
@@ -669,6 +821,17 @@ export default function LeadDetailScreen({
             </Pressable>
           </View>
         </View>
+
+        <SectionTitle title="Conversation" titleStyle={styles.sectionTitle} style={styles.sectionSpacing} />
+        <Card style={styles.conversationCard}>
+          <View style={styles.bigMicButton}>
+            <Ionicons name="mic-outline" size={32} color="#ffffff" />
+          </View>
+          <Text style={styles.conversationHint}>No conversation captured yet.</Text>
+          <Text style={styles.audioHint} numberOfLines={1}>
+            {audioUri ? `Audio: ${audioUri}` : 'Audio: not attached'}
+          </Text>
+        </Card>
       </ScrollView>
     </SafeAreaView>
   );
@@ -847,6 +1010,43 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 19,
     fontWeight: '600',
+  },
+  enrichmentCard: {
+    marginTop: 10,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderColor: '#e2e8f0',
+    shadowOpacity: 0,
+    elevation: 0,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  enrichmentRow: {
+    paddingVertical: 10,
+    gap: 4,
+  },
+  enrichmentRowDivider: {
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  enrichmentLabel: {
+    color: '#64748b',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  enrichmentValue: {
+    color: '#0f172a',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+  enrichmentLink: {
+    color: '#4f46e5',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
   },
   starRow: {
     marginTop: 12,

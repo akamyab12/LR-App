@@ -31,6 +31,16 @@ export interface LeadAiInsights {
   nextBestAction: string;
 }
 
+export interface LeadEnrichment {
+  enriched_job_title?: string | null;
+  enriched_seniority?: string | null;
+  enriched_company_size?: string | null;
+  enriched_industry?: string | null;
+  enriched_linkedin_url?: string | null;
+  enriched_company_domain?: string | null;
+  enriched_score?: number | null;
+}
+
 export interface Lead {
   id: string;
   name: string;
@@ -43,6 +53,7 @@ export interface Lead {
   followUpDate: string;
   quickTags: LeadTag[];
   aiInsights: LeadAiInsights;
+  enrichment?: LeadEnrichment;
 }
 
 export interface PriorityLead extends Lead {
